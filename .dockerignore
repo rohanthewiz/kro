@@ -1,0 +1,40 @@
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# IDE / editor
+.idea/
+.vscode/
+.zed
+.qodo
+.claude/
+opencode.json
+
+# OS
+.DS_Store
+**/.DS_Store
+
+# Local-only directories
+play/
+testing/
+certs/
+ai_docs/
+
+# Prebuilt binary (rebuilt inside the image)
+kro
+
+# DuckDB local data
+*.ddb
+*.wal
+*.duckdb
+*.duck
+
+# Docker / docs (not needed inside the image)
+Dockerfile
+.dockerignore
+README.md
+CLAUDE.md
+
+# Test files
+**/*_test.go

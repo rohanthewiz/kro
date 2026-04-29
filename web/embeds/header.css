@@ -1,0 +1,198 @@
+/* Shared top navigation bar — used by every page via the HeaderBar component.
+   Keeps the clean, flat dashboard look consistent across Dashboard, History,
+   K8s Resources, and Special Ops. */
+
+.header-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+.header-bar h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin: 0;
+    color: #2d3436;
+}
+.version-label {
+    font-size: 0.7rem;
+    font-weight: normal;
+    color: #888;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+/* Connection-status dot — used for SSE streams */
+.log-status {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #b2bec3;
+    transition: background 0.3s;
+}
+.log-status.connected    { background: #00b894; }
+.log-status.disconnected { background: #d63031; }
+.log-status.reconnecting { background: #fdcb6e; }
+
+/* Nav link — primary blue */
+.nav-link {
+    color: #0984e3;
+    text-decoration: none;
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 6px;
+    transition: background 0.15s;
+}
+.nav-link:hover { background: rgba(9,132,227,0.1); }
+
+/* Nav link — gray variant used for the unified top nav */
+.nav-link.nav-link-gray { color: #2d3436; }
+.nav-link.nav-link-gray:hover { background: rgba(45,52,54,0.1); }
+
+/* Active page pill */
+.nav-link.nav-link-active { background: rgba(9,132,227,0.12); color: #0984e3; }
+.nav-link.nav-link-gray.nav-link-active { background: rgba(45,52,54,0.12); color: #2d3436; }
+
+/* Refresh button — styled like a nav link pill (transparent bg, tinted hover). */
+.btn-reconnect {
+    background: transparent;
+    color: #2d3436;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.btn-reconnect:hover { background: rgba(45,52,54,0.1); }
+
+/* Dark-mode toggle — icon-only, same pill shape as nav links. */
+.btn-dark-toggle {
+    background: transparent;
+    color: #2d3436;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 1.1rem;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    line-height: 1;
+}
+.btn-dark-toggle:hover { background: rgba(45,52,54,0.1); }
+
+/* Context / namespace selector dropdowns in the header */
+.selector-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.selector-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: #636e72;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    padding-left: 2px;
+}
+.selector {
+    background: #fff;
+    color: #2d3436;
+    border: 1px solid #dfe6e9;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+    min-width: 140px;
+    max-width: 280px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.selector:focus {
+    outline: none;
+    border-color: #0984e3;
+    box-shadow: 0 0 0 2px rgba(9,132,227,0.15);
+}
+.selector.ns-input {
+    display: none; /* shown when namespace listing falls back to free-text */
+}
+
+/* Namespace controls — dropdown + inline-add input + +/− buttons */
+.ns-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.ns-add-input {
+    display: none; /* toggled by JS when the user clicks + */
+    min-width: 160px;
+}
+.btn-ns {
+    background: transparent;
+    color: #2d3436;
+    border: 1px solid #dfe6e9;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 0.95rem;
+    line-height: 1;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.btn-ns:hover { background: #eef2f3; }
+.btn-ns-add { color: #00b894; }
+.btn-ns-add:hover { background: rgba(0,184,148,0.12); border-color: #00b894; }
+.btn-ns-remove { color: #d63031; }
+.btn-ns-remove:hover { background: rgba(214,48,49,0.10); border-color: #d63031; }
+.btn-ns:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    background: transparent;
+    border-color: #dfe6e9;
+}
+.ns-empty-hint {
+    font-size: 0.78rem;
+    color: #b2bec3;
+    font-style: italic;
+    padding: 4px 8px;
+}
+
+/* ===== Dark mode ===== */
+body.dark .header-bar h1 { color: #e0e0e0; }
+body.dark .nav-link { color: #54a0ff; }
+body.dark .nav-link:hover { background: rgba(84,160,255,0.1); }
+body.dark .nav-link.nav-link-gray { color: #e0e0e0; }
+body.dark .nav-link.nav-link-gray:hover { background: rgba(224,224,224,0.1); }
+body.dark .nav-link.nav-link-active { background: rgba(84,160,255,0.18); color: #54a0ff; }
+body.dark .nav-link.nav-link-gray.nav-link-active { background: rgba(224,224,224,0.15); color: #ffffff; }
+body.dark .btn-dark-toggle { background: transparent; color: #e0e0e0; }
+body.dark .btn-dark-toggle:hover { background: rgba(224,224,224,0.1); }
+body.dark .btn-reconnect { background: transparent; color: #e0e0e0; }
+body.dark .btn-reconnect:hover { background: rgba(224,224,224,0.1); }
+body.dark .selector-label { color: #b2bec3; }
+body.dark .selector {
+    background: #16213e;
+    color: #e0e0e0;
+    border-color: #2d2d44;
+}
+body.dark .selector:focus {
+    border-color: #54a0ff;
+    box-shadow: 0 0 0 2px rgba(84,160,255,0.2);
+}
+body.dark .btn-ns {
+    color: #e0e0e0;
+    border-color: #2d2d44;
+}
+body.dark .btn-ns:hover { background: rgba(224,224,224,0.08); }
+body.dark .btn-ns-add { color: #55efc4; }
+body.dark .btn-ns-add:hover { background: rgba(85,239,196,0.10); border-color: #55efc4; }
+body.dark .btn-ns-remove { color: #ff7675; }
+body.dark .btn-ns-remove:hover { background: rgba(255,118,117,0.10); border-color: #ff7675; }
+body.dark .ns-empty-hint { color: #636e72; }
