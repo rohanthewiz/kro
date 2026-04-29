@@ -20,6 +20,20 @@ live updates over SSE, no cluster-side install.
 
 ## Install
 
+### Quick install (macOS / Linux)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/rohanthewiz/kro/main/install.sh | bash
+```
+
+Pulls the latest `main` into `~/.kro`, fetches Go 1.26 into `~/.local/go` if your
+system Go is missing or older (no sudo), builds, and symlinks `~/.local/bin/kro`.
+Re-run the same command any time to update.
+
+Override paths via env: `KRO_DIR`, `KRO_BIN_DIR`, `KRO_GO_DIR`, `KRO_GO_VERSION`.
+
+### From source
+
 ```sh
 go install ./...
 # or
