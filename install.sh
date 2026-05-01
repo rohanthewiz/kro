@@ -2,7 +2,7 @@
 #
 # install.sh — Install (or update) KRo from main.
 #
-# Pulls the latest main branch into ~/.kro, ensures Go >= 1.26 is available
+# Pulls the latest main branch into ~/.kro, ensures Go >= 1.25 is available
 # (auto-installing a private copy under ~/.local/go if needed), builds the
 # kro binary, and symlinks it into ~/.local/bin.
 #
@@ -17,7 +17,7 @@
 #   KRO_REPO_URL    git remote   (default: https://github.com/rohanthewiz/kro.git)
 #   KRO_DIR         repo dir     (default: $HOME/.kro)
 #   KRO_BIN_DIR     symlink dir  (default: $HOME/.local/bin)
-#   KRO_GO_VERSION  Go to fetch  (default: 1.26.0)
+#   KRO_GO_VERSION  Go to fetch  (default: 1.25.0)
 #   KRO_GO_DIR      Go install   (default: $HOME/.local/go)
 
 set -euo pipefail
@@ -25,7 +25,7 @@ set -euo pipefail
 KRO_REPO_URL="${KRO_REPO_URL:-https://github.com/rohanthewiz/kro.git}"
 KRO_DIR="${KRO_DIR:-$HOME/.kro}"
 KRO_BIN_DIR="${KRO_BIN_DIR:-$HOME/.local/bin}"
-KRO_GO_VERSION="${KRO_GO_VERSION:-1.26.0}"
+KRO_GO_VERSION="${KRO_GO_VERSION:-1.25.0}"
 KRO_GO_DIR="${KRO_GO_DIR:-$HOME/.local/go}"
 
 # ---- output helpers --------------------------------------------------------
