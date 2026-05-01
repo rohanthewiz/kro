@@ -181,21 +181,21 @@ body {
     min-width: 120px;
     background: #fff;
     border-radius: 10px;
-    padding: 14px 18px;
+    padding: 8px 14px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.06);
     text-align: center;
 }
 .summary-card .label {
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     color: #636e72;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     font-weight: 600;
 }
 .summary-card .value {
-    font-size: 1.6rem;
+    font-size: 1.2rem;
     font-weight: 700;
-    margin-top: 4px;
+    margin-top: 2px;
 }
 .summary-card.jobs .value { color: #0984e3; }
 .summary-card.deployments .value { color: #6c5ce7; }
@@ -346,7 +346,7 @@ tbody td {
     font-size: 0.7rem;
     font-weight: 600;
 }
-.status-badge.running, .status-badge.ready { background: #d4efdf; color: #00b894; }
+.status-badge.running, .status-badge.ready { background: #d4efdf; color: #0a7d5a; }
 .status-badge.complete, .status-badge.succeeded { background: #d5f5e3; color: #27ae60; }
 .status-badge.failed, .status-badge.unavailable, .status-badge.crashloopbackoff, .status-badge.oomkilled { background: #fadbd8; color: #d63031; }
 .status-badge.pending, .status-badge.containercreating, .status-badge.scaling { background: #fdebd0; color: #e17055; }

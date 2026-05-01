@@ -28,13 +28,13 @@ func (h HeaderBar) Render(b *element.Builder) any {
 				}
 			}),
 		),
-		b.DivClass("header-actions").R(
+		b.DivClass("header-selectors").R(
 			b.DivClass("selector-group").R(
 				b.Label("for", "ctx-select", "class", "selector-label").T("Cluster"),
 				b.Select("id", "ctx-select", "class", "selector").R(),
 			),
 			b.DivClass("selector-group").R(
-				b.Label("for", "ns-select", "class", "selector-label").T("Namespace"),
+				b.Label("for", "ns-select", "class", "selector-label").T("NS"),
 				b.DivClass("ns-controls").R(
 					b.Select("id", "ns-select", "class", "selector").R(),
 					b.Input("type", "text", "id", "ns-add-input", "class", "selector ns-add-input", "placeholder", "namespace name", "autocomplete", "off").R(),
@@ -42,6 +42,8 @@ func (h HeaderBar) Render(b *element.Builder) any {
 					b.Button("type", "button", "id", "btn-ns-remove", "class", "btn-ns btn-ns-remove", "title", "Remove selected namespace").T("×"),
 				),
 			),
+		),
+		b.DivClass("header-actions").R(
 			b.Span("id", "resources-sse-status", "class", "log-status disconnected").R(),
 			b.Button("class", "btn-reconnect", "onclick", "refreshResources()", "title", "Refresh").T("↻ Refresh"),
 			b.Button("class", "btn-dark-toggle", "id", "btn-dark-toggle", "onclick", "toggleDarkMode()").T("\U0001F319"),

@@ -3,10 +3,17 @@
    K8s Resources, and Special Ops. */
 
 .header-bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: baseline;
+    column-gap: 16px;
     margin-bottom: 20px;
+}
+.header-selectors {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    justify-self: center;
 }
 .header-bar h1 {
     font-size: 1.5rem;
@@ -25,6 +32,7 @@
     display: flex;
     align-items: center;
     gap: 16px;
+    justify-self: end;
 }
 
 /* Connection-status dot — used for SSE streams */
@@ -91,16 +99,16 @@
 /* Context / namespace selector dropdowns in the header */
 .selector-group {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 6px;
 }
 .selector-label {
-    font-size: 0.65rem;
+    font-size: 0.7rem;
     font-weight: 600;
     color: #636e72;
     text-transform: uppercase;
     letter-spacing: 0.4px;
-    padding-left: 2px;
 }
 .selector {
     background: #fff;
