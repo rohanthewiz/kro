@@ -582,6 +582,15 @@
         var span = document.createElement('span');
         span.innerHTML = highlightLogLine(line) + '\n';
         content.appendChild(span);
+        // If a search is active, highlight matches in this newly-arrived line
+        // and refresh the count display without re-scanning the whole buffer.
+        if (searchState.open && searchState.query) {
+            var added = highlightMatchesIn(span);
+            if (added > 0) {
+                searchState.matchCount += added;
+                refreshSearchCountLabel();
+            }
+        }
         if (atBottom && body) body.scrollTop = body.scrollHeight;
     }
 
@@ -656,6 +665,196 @@
         }
     }
 
+    // ===== Log search =====
+    // In-modal find for streaming logs. Matches are wrapped with
+    // <mark class="log-match">; the active match also gets .current.
+    // Highlighting is layered on top of the colorized log spans by walking
+    // text nodes — splitting them so existing color spans stay intact.
+    var searchState = {
+        open: false,
+        query: '',
+        caseSensitive: false,
+        wholeWord: false,
+        regex: false,
+        matchCount: 0,
+        currentIndex: 0,
+        invalidRegex: false
+    };
+
+    function buildSearchRegex() {
+        if (!searchState.query) return null;
+        var flags = searchState.caseSensitive ? 'g' : 'gi';
+        try {
+            if (searchState.regex) {
+                return new RegExp(searchState.query, flags);
+            }
+            var pat = searchState.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            if (searchState.wholeWord) pat = '\\b' + pat + '\\b';
+            return new RegExp(pat, flags);
+        } catch (e) {
+            return false; // signal invalid regex
+        }
+    }
+
+    function clearSearchMarks(root) {
+        if (!root) return;
+        var marks = root.querySelectorAll('mark.log-match');
+        for (var i = 0; i < marks.length; i++) {
+            var m = marks[i];
+            var parent = m.parentNode;
+            while (m.firstChild) parent.insertBefore(m.firstChild, m);
+            parent.removeChild(m);
+            parent.normalize();
+        }
+    }
+
+    function highlightMatchesIn(root) {
+        var rx = buildSearchRegex();
+        if (!rx) return 0;
+        var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+            acceptNode: function(n) {
+                if (!n.nodeValue) return NodeFilter.FILTER_REJECT;
+                if (n.parentNode && n.parentNode.nodeName === 'MARK') return NodeFilter.FILTER_REJECT;
+                return NodeFilter.FILTER_ACCEPT;
+            }
+        });
+        var nodes = [];
+        var n;
+        while ((n = walker.nextNode())) nodes.push(n);
+
+        var count = 0;
+        for (var i = 0; i < nodes.length; i++) {
+            var textNode = nodes[i];
+            var text = textNode.nodeValue;
+            rx.lastIndex = 0;
+            var matches = [];
+            var m;
+            while ((m = rx.exec(text)) !== null) {
+                if (m[0].length === 0) { rx.lastIndex++; continue; }
+                matches.push([m.index, m.index + m[0].length]);
+            }
+            if (!matches.length) continue;
+            var parent = textNode.parentNode;
+            var frag = document.createDocumentFragment();
+            var last = 0;
+            for (var j = 0; j < matches.length; j++) {
+                var s = matches[j][0], e = matches[j][1];
+                if (s > last) frag.appendChild(document.createTextNode(text.slice(last, s)));
+                var mk = document.createElement('mark');
+                mk.className = 'log-match';
+                mk.textContent = text.slice(s, e);
+                frag.appendChild(mk);
+                last = e;
+                count++;
+            }
+            if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+            parent.replaceChild(frag, textNode);
+        }
+        return count;
+    }
+
+    function refreshSearchCountLabel() {
+        var el = document.getElementById('modal-search-count');
+        if (!el) return;
+        if (searchState.invalidRegex) {
+            el.textContent = 'invalid regex';
+            el.classList.add('error');
+            return;
+        }
+        el.classList.remove('error');
+        if (!searchState.query) { el.textContent = ''; return; }
+        if (searchState.matchCount === 0) { el.textContent = 'no matches'; return; }
+        el.textContent = (searchState.currentIndex + 1) + ' / ' + searchState.matchCount;
+    }
+
+    function runSearch() {
+        var content = document.getElementById('modal-content');
+        if (!content) return;
+        clearSearchMarks(content);
+        searchState.invalidRegex = false;
+        searchState.matchCount = 0;
+        searchState.currentIndex = 0;
+        if (!searchState.query) {
+            refreshSearchCountLabel();
+            return;
+        }
+        var rx = buildSearchRegex();
+        if (rx === false) {
+            searchState.invalidRegex = true;
+            refreshSearchCountLabel();
+            return;
+        }
+        searchState.matchCount = highlightMatchesIn(content);
+        refreshSearchCountLabel();
+        if (searchState.matchCount > 0) navigateMatch(0, false);
+    }
+
+    function navigateMatch(delta, wrap) {
+        var marks = document.querySelectorAll('#modal-content mark.log-match');
+        if (!marks.length) return;
+        var cur = -1;
+        for (var i = 0; i < marks.length; i++) {
+            if (marks[i].classList.contains('current')) { cur = i; break; }
+        }
+        var next;
+        if (cur === -1) {
+            next = delta >= 0 ? 0 : marks.length - 1;
+        } else {
+            next = cur + delta;
+            if (wrap !== false) {
+                next = ((next % marks.length) + marks.length) % marks.length;
+            } else {
+                next = Math.max(0, Math.min(marks.length - 1, next));
+            }
+            marks[cur].classList.remove('current');
+        }
+        marks[next].classList.add('current');
+        marks[next].scrollIntoView({ block: 'center', behavior: 'smooth' });
+        searchState.currentIndex = next;
+        refreshSearchCountLabel();
+    }
+
+    window.toggleLogSearch = function() {
+        var bar = document.getElementById('modal-search-bar');
+        var btn = document.getElementById('modal-search-toggle');
+        if (!bar) return;
+        searchState.open = !searchState.open;
+        bar.classList.toggle('active', searchState.open);
+        if (btn) btn.classList.toggle('on', searchState.open);
+        if (searchState.open) {
+            var input = document.getElementById('modal-search-input');
+            if (input) { input.focus(); input.select(); }
+            runSearch();
+        } else {
+            clearSearchMarks(document.getElementById('modal-content'));
+        }
+    };
+
+    window.onLogSearchInput = function(value) {
+        searchState.query = value || '';
+        runSearch();
+    };
+
+    window.toggleLogSearchOpt = function(opt) {
+        var btn = document.getElementById('modal-search-' + opt);
+        searchState[opt === 'case' ? 'caseSensitive' : opt === 'word' ? 'wholeWord' : 'regex'] =
+            !searchState[opt === 'case' ? 'caseSensitive' : opt === 'word' ? 'wholeWord' : 'regex'];
+        if (btn) btn.classList.toggle('on');
+        runSearch();
+    };
+
+    window.logSearchNav = function(delta) { navigateMatch(delta, true); };
+
+    function handleSearchKeydown(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            navigateMatch(e.shiftKey ? -1 : 1, true);
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            window.toggleLogSearch();
+        }
+    }
+
     function openModal(title, content, opts) {
         var overlay = document.getElementById('resource-modal-overlay');
         if (!overlay) {
@@ -671,6 +870,12 @@
                     '<span class="log-status disconnected" id="modal-stream-dot"></span>' +
                     '<span class="modal-stream-label" id="modal-stream-label">Disconnected</span>' +
                 '</span>' +
+                '<button class="modal-search-toggle" id="modal-search-toggle" onclick="toggleLogSearch()" title="Search (Esc to close)" aria-label="Search">' +
+                    '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+                        '<circle cx="7" cy="7" r="5"></circle>' +
+                        '<line x1="11" y1="11" x2="14.5" y2="14.5"></line>' +
+                    '</svg>' +
+                '</button>' +
                 '<label class="modal-alpha" id="modal-alpha" title="Background opacity">' +
                     '<span class="modal-alpha-icon">◐</span>' +
                     '<input type="range" id="modal-alpha-input" min="10" max="100" step="1" oninput="setModalAlpha(this.value)">' +
@@ -680,6 +885,16 @@
                 '<button class="modal-copy" id="modal-copy" onclick="copyModalContent(this)" title="Copy to clipboard">⧉</button>' +
                 '<button class="modal-close" onclick="closeModal()">&times;</button>' +
                 '</div>' +
+                '</div>' +
+                '<div class="modal-search-bar" id="modal-search-bar">' +
+                    '<input type="text" id="modal-search-input" placeholder="Search logs…" oninput="onLogSearchInput(this.value)" autocomplete="off" spellcheck="false">' +
+                    '<button class="modal-search-opt" id="modal-search-case" onclick="toggleLogSearchOpt(\'case\')" title="Match case">Aa</button>' +
+                    '<button class="modal-search-opt" id="modal-search-word" onclick="toggleLogSearchOpt(\'word\')" title="Whole word"><u>W</u></button>' +
+                    '<button class="modal-search-opt" id="modal-search-regex" onclick="toggleLogSearchOpt(\'regex\')" title="Regular expression">.*</button>' +
+                    '<span class="modal-search-count" id="modal-search-count"></span>' +
+                    '<button class="modal-search-nav" onclick="logSearchNav(-1)" title="Previous match (Shift+Enter)">↑</button>' +
+                    '<button class="modal-search-nav" onclick="logSearchNav(1)" title="Next match (Enter)">↓</button>' +
+                    '<button class="modal-search-close" onclick="toggleLogSearch()" title="Close (Esc)">&times;</button>' +
                 '</div>' +
                 '<div class="modal-body">' +
                 '<pre class="modal-content" id="modal-content"></pre>' +
@@ -692,6 +907,8 @@
             var dialogEl = overlay.querySelector('.modal-dialog');
             attachModalDrag(dialogEl);
             attachModalResize(dialogEl);
+            var searchInput = document.getElementById('modal-search-input');
+            if (searchInput) searchInput.addEventListener('keydown', handleSearchKeydown);
         }
         document.getElementById('modal-title').textContent = title;
         document.getElementById('modal-content').textContent = content;
@@ -705,6 +922,29 @@
         if (alphaEl) {
             alphaEl.style.display = (opts && opts.wide) ? '' : 'none';
         }
+        var searchToggleEl = document.getElementById('modal-search-toggle');
+        if (searchToggleEl) {
+            searchToggleEl.style.display = (opts && opts.stream) ? '' : 'none';
+            searchToggleEl.classList.remove('on');
+        }
+        var searchBarEl = document.getElementById('modal-search-bar');
+        if (searchBarEl) searchBarEl.classList.remove('active');
+        var searchInputReset = document.getElementById('modal-search-input');
+        if (searchInputReset) searchInputReset.value = '';
+        ['modal-search-case', 'modal-search-word', 'modal-search-regex'].forEach(function(id) {
+            var b = document.getElementById(id);
+            if (b) b.classList.remove('on');
+        });
+        var searchCountReset = document.getElementById('modal-search-count');
+        if (searchCountReset) { searchCountReset.textContent = ''; searchCountReset.classList.remove('error'); }
+        searchState.open = false;
+        searchState.query = '';
+        searchState.caseSensitive = false;
+        searchState.wholeWord = false;
+        searchState.regex = false;
+        searchState.matchCount = 0;
+        searchState.currentIndex = 0;
+        searchState.invalidRegex = false;
         if (opts && opts.stream) setStreamStatus('reconnecting', 'Connecting…');
         applyModalFontSize();
         applyModalAlpha();
