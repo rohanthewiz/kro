@@ -605,6 +605,10 @@
                     '<span class="log-status disconnected" id="modal-stream-dot"></span>' +
                     '<span class="modal-stream-label" id="modal-stream-label">Disconnected</span>' +
                 '</span>' +
+                '<label class="modal-alpha" id="modal-alpha" title="Background opacity">' +
+                    '<span class="modal-alpha-icon">◐</span>' +
+                    '<input type="range" id="modal-alpha-input" min="10" max="100" step="1" oninput="setModalAlpha(this.value)">' +
+                '</label>' +
                 '<button class="modal-font" id="modal-font-down" onclick="adjustModalFont(-1)" title="Decrease font size">A−</button>' +
                 '<button class="modal-font" id="modal-font-up" onclick="adjustModalFont(1)" title="Increase font size">A+</button>' +
                 '<button class="modal-copy" id="modal-copy" onclick="copyModalContent(this)" title="Copy to clipboard">⧉</button>' +
@@ -619,6 +623,9 @@
             overlay.addEventListener('click', function(e) {
                 if (e.target === overlay) closeModal();
             });
+            var dialogEl = overlay.querySelector('.modal-dialog');
+            attachModalDrag(dialogEl);
+            attachModalResize(dialogEl);
         }
         document.getElementById('modal-title').textContent = title;
         document.getElementById('modal-content').textContent = content;
@@ -628,9 +635,122 @@
         if (statusEl) {
             statusEl.style.display = (opts && opts.stream) ? '' : 'none';
         }
+        var alphaEl = document.getElementById('modal-alpha');
+        if (alphaEl) {
+            alphaEl.style.display = (opts && opts.wide) ? '' : 'none';
+        }
         if (opts && opts.stream) setStreamStatus('reconnecting', 'Connecting…');
         applyModalFontSize();
+        applyModalAlpha();
+        resetModalDrag();
         overlay.classList.add('active');
+    }
+
+    // ===== Drag =====
+    // Allows the user to grab the modal header and drag the dialog around the
+    // viewport. The overlay flex-centers the dialog, so we shift via transform
+    // — accumulating delta into modalDragX/Y across separate drags. Reset on
+    // each openModal so a fresh popup re-centers.
+    var modalDragX = 0, modalDragY = 0;
+    function resetModalDrag() {
+        modalDragX = 0;
+        modalDragY = 0;
+        var dialog = document.querySelector('#resource-modal-overlay .modal-dialog');
+        if (dialog) {
+            dialog.style.transform = '';
+            dialog.style.width = '';
+            dialog.style.height = '';
+        }
+    }
+    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+    function attachModalDrag(dialog) {
+        if (!dialog) return;
+        var header = dialog.querySelector('.modal-header');
+        if (!header) return;
+        var dragging = false;
+        var startX = 0, startY = 0;
+        var baseX = 0, baseY = 0;
+
+        header.addEventListener('mousedown', function(e) {
+            // Skip drags initiated on interactive controls in the header.
+            if (e.target.closest('button, input, .modal-stream-status, label')) return;
+            if (e.button !== 0) return;
+            dragging = true;
+            startX = e.clientX;
+            startY = e.clientY;
+            baseX = modalDragX;
+            baseY = modalDragY;
+            header.classList.add('dragging');
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', function(e) {
+            if (!dragging) return;
+            modalDragX = baseX + (e.clientX - startX);
+            modalDragY = baseY + (e.clientY - startY);
+            dialog.style.transform = 'translate(' + modalDragX + 'px, ' + modalDragY + 'px)';
+        });
+
+        document.addEventListener('mouseup', function() {
+            if (!dragging) return;
+            dragging = false;
+            header.classList.remove('dragging');
+        });
+    }
+
+    // ===== Resize =====
+    // Builds five edge/corner handles on the dialog (no top handle — the
+    // header owns the top edge as a drag handle). The dialog is flex-centered
+    // by the overlay and shifted via translate; on resize we adjust both the
+    // size and the translate so the opposite edge stays visually anchored.
+    function attachModalResize(dialog) {
+        if (!dialog) return;
+        var specs = [
+            { cls: 'right',  xs:  1, ys: 0 },
+            { cls: 'left',   xs: -1, ys: 0 },
+            { cls: 'bottom', xs:  0, ys: 1 },
+            { cls: 'br',     xs:  1, ys: 1 },
+            { cls: 'bl',     xs: -1, ys: 1 }
+        ];
+        specs.forEach(function(s) {
+            var handle = document.createElement('div');
+            handle.className = 'modal-resize ' + s.cls;
+            dialog.appendChild(handle);
+
+            var resizing = false;
+            var startX = 0, startY = 0, startW = 0, startH = 0, startTX = 0, startTY = 0;
+
+            handle.addEventListener('mousedown', function(e) {
+                if (e.button !== 0) return;
+                resizing = true;
+                var rect = dialog.getBoundingClientRect();
+                startX = e.clientX;
+                startY = e.clientY;
+                startW = rect.width;
+                startH = rect.height;
+                startTX = modalDragX;
+                startTY = modalDragY;
+                e.preventDefault();
+                e.stopPropagation();
+            });
+
+            document.addEventListener('mousemove', function(e) {
+                if (!resizing) return;
+                var dx = e.clientX - startX;
+                var dy = e.clientY - startY;
+                var maxW = window.innerWidth * 0.98;
+                var maxH = window.innerHeight * 0.98;
+                var newW = clamp(startW + s.xs * dx, 360, maxW);
+                var newH = clamp(startH + s.ys * dy, 220, maxH);
+                if (s.xs !== 0) dialog.style.width = newW + 'px';
+                if (s.ys !== 0) dialog.style.height = newH + 'px';
+                modalDragX = startTX + s.xs * (newW - startW) / 2;
+                modalDragY = startTY + s.ys * (newH - startH) / 2;
+                dialog.style.transform = 'translate(' + modalDragX + 'px, ' + modalDragY + 'px)';
+            });
+
+            document.addEventListener('mouseup', function() { resizing = false; });
+        });
     }
 
     var MODAL_FONT_KEY = 'kro_modal_font_px';
@@ -654,6 +774,30 @@
         size = Math.max(MODAL_FONT_MIN, Math.min(MODAL_FONT_MAX, size));
         localStorage.setItem(MODAL_FONT_KEY, String(size));
         applyModalFontSize();
+    };
+
+    var MODAL_ALPHA_KEY = 'kro_modal_alpha';
+    var MODAL_ALPHA_MIN = 10;
+    var MODAL_ALPHA_DEFAULT = 60;
+
+    function getModalAlpha() {
+        var v = parseInt(localStorage.getItem(MODAL_ALPHA_KEY), 10);
+        if (isNaN(v)) return MODAL_ALPHA_DEFAULT;
+        return Math.max(MODAL_ALPHA_MIN, Math.min(100, v));
+    }
+
+    function applyModalAlpha() {
+        var dialog = document.querySelector('#resource-modal-overlay .modal-dialog');
+        var alpha = getModalAlpha();
+        if (dialog) dialog.style.setProperty('--modal-alpha', (alpha / 100).toFixed(2));
+        var input = document.getElementById('modal-alpha-input');
+        if (input) input.value = String(alpha);
+    }
+
+    window.setModalAlpha = function(val) {
+        var v = Math.max(MODAL_ALPHA_MIN, Math.min(100, parseInt(val, 10) || MODAL_ALPHA_DEFAULT));
+        localStorage.setItem(MODAL_ALPHA_KEY, String(v));
+        applyModalAlpha();
     };
 
     function setModalContent(text) {

@@ -419,6 +419,7 @@ tbody td {
 .modal-dialog {
     background: #fff;
     border-radius: 12px;
+    border-top: 1.5px solid #0984e3;
     box-shadow: 0 8px 32px rgba(0,0,0,0.2);
     width: 90%;
     max-width: 900px;
@@ -428,10 +429,40 @@ tbody td {
 }
 
 .modal-dialog.wide {
+    --modal-alpha: 0.8;
     width: 90vw;
-    max-width: 90vw;
-    max-height: 90vh;
+    max-width: 98vw;
+    max-height: 98vh;
+    min-width: 360px;
+    min-height: 220px;
+    background: rgba(255, 255, 255, var(--modal-alpha));
+    backdrop-filter: blur(1.5px);
+    -webkit-backdrop-filter: blur(1.5px);
+    position: relative;
+    overflow: hidden;
 }
+
+/* Resize handles — bottom, left, right, and the two bottom corners.
+   No top handle: the dialog header is the drag handle, so resizing the
+   top would fight the drag. */
+.modal-resize { position: absolute; z-index: 5; }
+.modal-resize.right  { top: 8px; bottom: 14px; right: 0; width: 6px; cursor: ew-resize; }
+.modal-resize.left   { top: 8px; bottom: 14px; left: 0; width: 6px; cursor: ew-resize; }
+.modal-resize.bottom { left: 14px; right: 14px; bottom: 0; height: 6px; cursor: ns-resize; }
+.modal-resize.br     { right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; z-index: 6; }
+.modal-resize.bl     { left: 0; bottom: 0; width: 16px; height: 16px; cursor: nesw-resize; z-index: 6; }
+.modal-resize.br::after,
+.modal-resize.bl::after {
+    content: "";
+    position: absolute;
+    width: 8px; height: 8px;
+    bottom: 3px;
+    border-bottom: 2px solid #b2bec3;
+}
+.modal-resize.br::after { right: 3px; border-right: 2px solid #b2bec3; }
+.modal-resize.bl::after { left: 3px; border-left: 2px solid #b2bec3; }
+body.dark .modal-resize.br::after,
+body.dark .modal-resize.bl::after { border-color: #54a0ff; }
 
 .modal-header {
     display: flex;
@@ -440,7 +471,15 @@ tbody td {
     padding: 16px 20px;
     border-bottom: 1px solid #dfe6e9;
     flex-shrink: 0;
+    cursor: move;
+    user-select: none;
 }
+.modal-header.dragging { cursor: grabbing; }
+.modal-header button,
+.modal-header input,
+.modal-header label,
+.modal-header .modal-stream-status { cursor: pointer; }
+.modal-header input[type="range"] { cursor: ew-resize; }
 
 .modal-title {
     font-weight: 700;
@@ -453,6 +492,58 @@ tbody td {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+.modal-alpha {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 1px 7px;
+    border: 1px solid #dfe6e9;
+    border-radius: 999px;
+    color: #636e72;
+    cursor: pointer;
+    user-select: none;
+}
+.modal-alpha-icon {
+    font-size: 0.85rem;
+    line-height: 1;
+}
+.modal-alpha input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 64px;
+    height: 10px;
+    background: transparent;
+    cursor: ew-resize;
+    margin: 0;
+    padding: 0;
+}
+.modal-alpha input[type="range"]::-webkit-slider-runnable-track {
+    height: 3px;
+    background: #dfe6e9;
+    border-radius: 2px;
+}
+.modal-alpha input[type="range"]::-moz-range-track {
+    height: 3px;
+    background: #dfe6e9;
+    border-radius: 2px;
+}
+.modal-alpha input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: #0984e3;
+    border: none;
+    margin-top: -3.5px;
+}
+.modal-alpha input[type="range"]::-moz-range-thumb {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: #0984e3;
+    border: none;
 }
 
 .modal-stream-status {
@@ -584,7 +675,11 @@ body.dark .warning-item {
 }
 body.dark .modal-dialog {
     background: #16213e;
+    border-top-color: #54a0ff;
     box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+body.dark .modal-dialog.wide {
+    background: rgba(22, 33, 62, var(--modal-alpha));
 }
 body.dark .modal-header {
     border-bottom-color: #2d2d44;
@@ -595,6 +690,11 @@ body.dark .modal-copy,
 body.dark .modal-font { color: #b2bec3; border-color: #636e72; }
 body.dark .modal-copy:hover,
 body.dark .modal-font:hover { color: #74b9ff; border-color: #74b9ff; }
+body.dark .modal-alpha { color: #b2bec3; border-color: #2d2d44; }
+body.dark .modal-alpha input[type="range"]::-webkit-slider-runnable-track,
+body.dark .modal-alpha input[type="range"]::-moz-range-track { background: #2d3a5a; }
+body.dark .modal-alpha input[type="range"]::-webkit-slider-thumb,
+body.dark .modal-alpha input[type="range"]::-moz-range-thumb { background: #54a0ff; }
 body.dark .modal-stream-status { color: #b2bec3; border-color: #2d2d44; }
 body.dark .modal-stream-status:hover {
     background: rgba(116,185,255,0.1);
