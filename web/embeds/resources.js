@@ -579,8 +579,74 @@
     function appendLogLine(content, line) {
         var body = content.parentNode; // .modal-body is the scroll container
         var atBottom = !body || (body.scrollHeight - body.scrollTop - body.clientHeight < 30);
-        content.appendChild(document.createTextNode(line + '\n'));
+        var span = document.createElement('span');
+        span.innerHTML = highlightLogLine(line) + '\n';
+        content.appendChild(span);
         if (atBottom && body) body.scrollTop = body.scrollHeight;
+    }
+
+    // Colorize a single log line. Handles two styles seen in pod logs:
+    //   structured Go logs:  time="..." level=info msg="..."
+    //   legacy/python logs:  INFO -- 05/01/2026 ... 'string' 'string'
+    // Levels get conventional colors, dates/times are green, positive numbers
+    // cyan, negatives orange, true/false get the same cyan/orange treatment,
+    // and on error-level lines msg="..." is highlighted in maroon.
+    function highlightLogLine(line) {
+        var escaped = escapeHtml(line);
+        var isError = /\blevel=(error|err|fatal)\b/i.test(line) ||
+                      /\b(ERROR|FATAL)\b/.test(line);
+
+        // Order matters: date/time alts come before bare numbers so a date's
+        // digit groups aren't picked off as standalone numbers.
+        var re = new RegExp([
+            '\\bmsg=(&quot;.*?&quot;)',                                                // 1: msg val (only used when isError)
+            '(\\w+)=(?=&quot;)',                                                       // 2: key before quoted value
+            '\\blevel=([A-Za-z]+)',                                                    // 3: unquoted level value
+            '\\b(INFO|WARN(?:ING)?|ERROR|DEBUG|FATAL|TRACE)\\b',                       // 4: bare level token
+            '\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?',
+            '\\d{2}/\\d{2}/\\d{4}\\s+\\d{1,2}:\\d{2}:\\d{2}(?:\\s*[AP]M)?',
+            '\\d{4}-\\d{2}-\\d{2}',
+            '\\d{2}/\\d{2}/\\d{4}',
+            '\\d{1,2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:\\s*[AP]M)?',
+            '\\b(true|false)\\b',                                                      // 5: bool
+            '-?\\b\\d+(?:\\.\\d+)?\\b',                                                // (no group) numbers
+        ].join('|'), 'g');
+
+        return escaped.replace(re, function(m, msgVal, key, lvlVal, bareLvl, boolVal) {
+            if (msgVal !== undefined) {
+                if (isError) return '<span class="log-msg-err">msg=' + msgVal + '</span>';
+                return '<span class="log-key">msg</span>=' + highlightInner(msgVal);
+            }
+            if (key !== undefined) return '<span class="log-key">' + key + '</span>=';
+            if (lvlVal) return '<span class="log-key">level</span>=<span class="log-level log-level-' + lvlVal.toLowerCase() + '">' + lvlVal + '</span>';
+            if (bareLvl) return '<span class="log-level log-level-' + bareLvl.toLowerCase() + '">' + bareLvl + '</span>';
+            if (boolVal !== undefined) return '<span class="log-bool log-bool-' + boolVal + '">' + boolVal + '</span>';
+            // Whatever remains is a date/time or number — disambiguate by content.
+            if (/^-/.test(m)) return '<span class="log-num-neg">' + m + '</span>';
+            if (/^\d+(?:\.\d+)?$/.test(m)) return '<span class="log-num">' + m + '</span>';
+            return '<span class="log-time">' + m + '</span>';
+        });
+    }
+
+    // Re-highlight just the inner tokens (dates, numbers, booleans) of an
+    // already-captured quoted value — used when we consumed the whole msg=
+    // chunk on a non-error line and still want to colorize what's inside.
+    function highlightInner(s) {
+        var re = new RegExp([
+            '\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?',
+            '\\d{2}/\\d{2}/\\d{4}\\s+\\d{1,2}:\\d{2}:\\d{2}(?:\\s*[AP]M)?',
+            '\\d{4}-\\d{2}-\\d{2}',
+            '\\d{2}/\\d{2}/\\d{4}',
+            '\\d{1,2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:\\s*[AP]M)?',
+            '\\b(true|false)\\b',
+            '-?\\b\\d+(?:\\.\\d+)?\\b',
+        ].join('|'), 'g');
+        return s.replace(re, function(m, boolVal) {
+            if (boolVal !== undefined) return '<span class="log-bool log-bool-' + boolVal + '">' + boolVal + '</span>';
+            if (/^-/.test(m)) return '<span class="log-num-neg">' + m + '</span>';
+            if (/^\d+(?:\.\d+)?$/.test(m)) return '<span class="log-num">' + m + '</span>';
+            return '<span class="log-time">' + m + '</span>';
+        });
     }
 
     function closeLogStream() {

@@ -702,3 +702,45 @@ body.dark .modal-stream-status:hover {
     color: #74b9ff;
 }
 body.dark .modal-content { color: #e0e0e0; }
+
+/* ===== Log syntax highlighting ===== */
+.log-key { color: #6c5ce7; }
+.log-time { color: #1e7a36; }
+.log-num { color: #0a96a6; }
+.log-num-neg { color: #d97706; }
+.log-bool { font-weight: 600; }
+.log-bool-true { color: #0a96a6; }
+.log-bool-false { color: #d97706; }
+.log-level { font-weight: 600; }
+.log-level-debug { color: #636e72; }
+.log-level-info  { color: #0a7ea4; }
+.log-level-warn,
+.log-level-warning { color: #b6701a; }
+.log-level-error { color: #c0392b; }
+.log-level-fatal { color: #c0392b; font-weight: 700; }
+.log-level-trace { color: #8395a7; }
+.log-msg-err {
+    color: #800000;
+    background: rgba(128,0,0,0.08);
+    font-weight: 600;
+    border-radius: 2px;
+    padding: 0 2px;
+}
+
+body.dark .log-key { color: #a29bfe; }
+body.dark .log-time { color: #6ada8e; }
+body.dark .log-num { color: #4ad7d3; }
+body.dark .log-num-neg { color: #ffa94d; }
+body.dark .log-bool-true { color: #4ad7d3; }
+body.dark .log-bool-false { color: #ffa94d; }
+body.dark .log-level-debug { color: #b2bec3; }
+body.dark .log-level-info  { color: #74b9ff; }
+body.dark .log-level-warn,
+body.dark .log-level-warning { color: #fdcb6e; }
+body.dark .log-level-error { color: #ff6b6b; }
+body.dark .log-level-fatal { color: #ff6b6b; }
+body.dark .log-level-trace { color: #b2bec3; }
+body.dark .log-msg-err {
+    color: #ff8a8a;
+    background: rgba(192,57,43,0.18);
+}
