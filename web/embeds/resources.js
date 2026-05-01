@@ -73,7 +73,7 @@
         var input = document.getElementById('ns-add-input');
         var sel = document.getElementById('ns-select');
         sel.style.display = 'none';
-        input.style.display = '';
+        input.style.display = 'inline-block';
         input.value = '';
         input.focus();
     }
@@ -530,15 +530,67 @@
         .catch(function(err) { setModalContent('Error: ' + err.message); });
     };
 
+    var logSource = null;
+    var logSourcePod = '';
+
     window.viewLogs = function(name) {
-        openModal('Logs: ' + name, 'Loading...');
-        fetch('/api/logs?name=' + encodeURIComponent(name))
-        .then(function(r) { return r.text(); })
-        .then(function(text) { setModalContent(text); })
-        .catch(function(err) { setModalContent('Error: ' + err.message); });
+        closeLogStream();
+        openModal('Logs: ' + name, '', { wide: true, stream: true });
+        startLogStream(name);
     };
 
-    function openModal(title, content) {
+    function startLogStream(name) {
+        closeLogStream();
+        logSourcePod = name;
+        var content = document.getElementById('modal-content');
+        if (!content) return;
+        setStreamStatus('reconnecting', 'Connecting…');
+
+        logSource = new EventSource('/sse/logs?name=' + encodeURIComponent(name));
+        logSource.onopen = function() {
+            setStreamStatus('connected', 'Connected');
+        };
+        logSource.addEventListener('log', function(e) {
+            // Any log frame implies a healthy stream — flip the pill green
+            // even if onopen hasn't fired yet (some browsers emit log first).
+            setStreamStatus('connected', 'Connected');
+            appendLogLine(content, e.data);
+        });
+        logSource.onerror = function() {
+            // EventSource will auto-reconnect on its own; surface state so
+            // the user can see (and click) when the stream is stuck.
+            setStreamStatus('reconnecting', 'Reconnecting…');
+            appendLogLine(content, '— disconnected, retrying —');
+        };
+    }
+
+    function setStreamStatus(state, label) {
+        var dot = document.getElementById('modal-stream-dot');
+        var lbl = document.getElementById('modal-stream-label');
+        if (dot) dot.className = 'log-status ' + state;
+        if (lbl) lbl.textContent = label;
+    }
+
+    window.reconnectLogStream = function() {
+        if (!logSourcePod) return;
+        startLogStream(logSourcePod);
+    };
+
+    function appendLogLine(content, line) {
+        var body = content.parentNode; // .modal-body is the scroll container
+        var atBottom = !body || (body.scrollHeight - body.scrollTop - body.clientHeight < 30);
+        content.appendChild(document.createTextNode(line + '\n'));
+        if (atBottom && body) body.scrollTop = body.scrollHeight;
+    }
+
+    function closeLogStream() {
+        if (logSource) {
+            logSource.close();
+            logSource = null;
+        }
+    }
+
+    function openModal(title, content, opts) {
         var overlay = document.getElementById('resource-modal-overlay');
         if (!overlay) {
             overlay = document.createElement('div');
@@ -549,6 +601,12 @@
                 '<div class="modal-header">' +
                 '<span class="modal-title" id="modal-title"></span>' +
                 '<div class="modal-header-actions">' +
+                '<span class="modal-stream-status" id="modal-stream-status" onclick="reconnectLogStream()" title="Click to reconnect">' +
+                    '<span class="log-status disconnected" id="modal-stream-dot"></span>' +
+                    '<span class="modal-stream-label" id="modal-stream-label">Disconnected</span>' +
+                '</span>' +
+                '<button class="modal-font" id="modal-font-down" onclick="adjustModalFont(-1)" title="Decrease font size">A−</button>' +
+                '<button class="modal-font" id="modal-font-up" onclick="adjustModalFont(1)" title="Increase font size">A+</button>' +
                 '<button class="modal-copy" id="modal-copy" onclick="copyModalContent(this)" title="Copy to clipboard">⧉</button>' +
                 '<button class="modal-close" onclick="closeModal()">&times;</button>' +
                 '</div>' +
@@ -564,8 +622,39 @@
         }
         document.getElementById('modal-title').textContent = title;
         document.getElementById('modal-content').textContent = content;
+        var dialog = overlay.querySelector('.modal-dialog');
+        if (dialog) dialog.classList.toggle('wide', !!(opts && opts.wide));
+        var statusEl = document.getElementById('modal-stream-status');
+        if (statusEl) {
+            statusEl.style.display = (opts && opts.stream) ? '' : 'none';
+        }
+        if (opts && opts.stream) setStreamStatus('reconnecting', 'Connecting…');
+        applyModalFontSize();
         overlay.classList.add('active');
     }
+
+    var MODAL_FONT_KEY = 'kro_modal_font_px';
+    var MODAL_FONT_MIN = 9;
+    var MODAL_FONT_MAX = 22;
+    var MODAL_FONT_DEFAULT = 12; // matches CSS .modal-content default (~0.78rem)
+
+    function getModalFontSize() {
+        var v = parseInt(localStorage.getItem(MODAL_FONT_KEY), 10);
+        if (isNaN(v)) return MODAL_FONT_DEFAULT;
+        return Math.max(MODAL_FONT_MIN, Math.min(MODAL_FONT_MAX, v));
+    }
+
+    function applyModalFontSize() {
+        var el = document.getElementById('modal-content');
+        if (el) el.style.fontSize = getModalFontSize() + 'px';
+    }
+
+    window.adjustModalFont = function(delta) {
+        var size = getModalFontSize() + delta;
+        size = Math.max(MODAL_FONT_MIN, Math.min(MODAL_FONT_MAX, size));
+        localStorage.setItem(MODAL_FONT_KEY, String(size));
+        applyModalFontSize();
+    };
 
     function setModalContent(text) {
         var el = document.getElementById('modal-content');
@@ -583,6 +672,7 @@
     };
 
     window.closeModal = function() {
+        closeLogStream();
         var overlay = document.getElementById('resource-modal-overlay');
         if (overlay) overlay.classList.remove('active');
     };
