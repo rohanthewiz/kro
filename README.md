@@ -13,6 +13,10 @@ live updates over SSE, no cluster-side install.
   DaemonSets, plus flat read-only listings for Services, Ingresses, ConfigMaps, Secrets.
 - Per-row actions: Describe (kubectl-describe-style text), Logs (Pods, all containers),
   Delete (Job/Pod/Deployment/ReplicaSet only).
+- Collapsible Terminal section: type kubectl arguments (auto-prefixed with the
+  active `--context`/`--namespace`), live stdout/stderr streamed back as
+  Warp-style blocks. Multi-line editor with syntax highlight and ↑↓ history.
+  Requires `kubectl` on PATH.
 - Live updates every ~10s via Server-Sent Events; each browser tab can target a
   different cluster/namespace independently (selection is cookie-keyed).
 - Collapsible sections (state persists per browser).
@@ -81,6 +85,7 @@ web/      rweb routes, handlers, SSE feeder, page render, embedded CSS/JS
 | GET    | `/api/logs?name=`          | Pod logs (all containers, last 500 lines each)         |
 | DELETE | `/api/resources`           | Delete a resource `{kind, name}`                       |
 | GET    | `/sse/resources`           | SSE stream of resource snapshots for the cookie scope  |
+| GET    | `/sse/term?cmd=...`        | Run `kubectl <cmd>` against active ctx/ns; SSE stdout/stderr/done |
 | GET    | `/health`                  | Liveness probe                                         |
 
 ## Develop

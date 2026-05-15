@@ -44,6 +44,8 @@ func renderPage() string {
 					summaryCard(b, "services", "Services", "summary-services"),
 				),
 
+				terminalSection(b),
+
 				b.Div("id", "resources-content").R(
 					b.DivClass("loading").T("Loading resources"),
 				),
@@ -59,6 +61,41 @@ func summaryCard(b *element.Builder, cls, label, valueID string) any {
 	b.DivClass("summary-card " + cls).R(
 		b.DivClass("label").T(label),
 		b.Div("class", "value", "id", valueID).T("-"),
+	)
+	return nil
+}
+
+// terminalSection renders the collapsible kubectl terminal that sits above the
+// resource tree. Past commands and live output are rendered as blocks into
+// #term-blocks; the input row sits at the bottom with a transparent textarea
+// overlaid on a syntax-highlighting <pre> so the user gets click-to-position
+// editing while the visible text is colorized.
+func terminalSection(b *element.Builder) any {
+	// Start collapsed by default; JS reads kro_collapsed_terminal from
+	// localStorage in initTerminal() and may un-collapse it on load.
+	b.Div("class", "resource-section term-section collapsed", "data-section", "terminal", "id", "term-section").R(
+		b.DivClass("section-header").R(
+			b.Span("class", "section-chevron", "onclick", "toggleSection('terminal')").T("▸"),
+			b.H2("onclick", "toggleSection('terminal')").T("Terminal"),
+			b.Span("class", "section-count term-target", "id", "term-target").T("—"),
+			b.Span("class", "term-hint").T("kubectl auto-prefixed · Enter=run · Shift+Enter=newline · ↑↓=history · Ctrl+L=clear · Esc=cancel"),
+			b.Span("class", "term-spacer").R(),
+			b.Button("type", "button", "class", "term-action term-cancel", "id", "term-cancel", "title", "Cancel running command", "onclick", "termCancel()").T("Cancel"),
+			b.Button("type", "button", "class", "term-action term-clear", "id", "term-clear", "title", "Clear output (Ctrl+L)", "onclick", "termClear()").T("Clear"),
+		),
+		b.DivClass("table-wrapper term-wrapper").R(
+			b.Div("class", "term-blocks", "id", "term-blocks").R(
+				b.DivClass("term-empty").T("kubectl output appears here. Try: get pods"),
+			),
+			b.DivClass("term-input-row").R(
+				b.Span("class", "term-prompt").T("$ kubectl"),
+				b.DivClass("term-editor").R(
+					b.Pre("class", "term-highlight", "id", "term-highlight", "aria-hidden", "true").R(),
+					b.TextArea("class", "term-input", "id", "term-input", "rows", "1", "autocomplete", "off", "autocorrect", "off", "autocapitalize", "off", "spellcheck", "false", "placeholder", "get pods -A").R(),
+				),
+				b.Button("type", "button", "class", "term-run", "id", "term-run", "title", "Run (Enter)", "onclick", "termRun()").T("▶"),
+			),
+		),
 	)
 	return nil
 }

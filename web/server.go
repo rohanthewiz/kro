@@ -30,6 +30,7 @@ func NewServer(cfg config.Config, reg *kube.ClientRegistry, store *state.Store) 
 	svr.Delete("/api/resources", h.Delete)
 	svr.Get("/sse/resources", h.SSE(svr))
 	svr.Get("/sse/logs", h.LogsSSE(svr))
+	svr.Get("/sse/term", h.TermSSE(svr))
 	svr.Get("/health", func(c rweb.Context) error { return c.WriteString("ok") })
 
 	return svr

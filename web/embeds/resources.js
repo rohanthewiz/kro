@@ -128,6 +128,7 @@
         }).then(function(r) { return r.json(); }).then(function(data) {
             currentCtx = data.context || currentCtx;
             currentNs = data.namespace || currentNs;
+            updateTermTarget();
             refreshResources();
             initResourcesStream();
         });
@@ -135,6 +136,7 @@
 
     function onContextChange() {
         var ctx = document.getElementById('ctx-select').value;
+        currentCtx = ctx;
         // Clear ns cookie by sending empty namespace AFTER setting context, then reload ns list.
         fetch('/api/select', {
             method: 'POST',
@@ -151,6 +153,7 @@
                         body: JSON.stringify({ namespace: ns })
                     });
                 }
+                updateTermTarget();
                 refreshResources();
                 initResourcesStream();
             });
@@ -1197,6 +1200,406 @@
         };
     }
 
+    // ===== Terminal =====
+    // A small kubectl-only terminal that sits above the resource sections.
+    // The Go server runs `kubectl --context=<ctx> --namespace=<ns> <args...>`
+    // and streams stdout/stderr over /sse/term. The visible "editor" is a
+    // transparent textarea overlaid on a syntax-highlighting <pre> so the
+    // caret is native (click anywhere to position) while the rendered text is
+    // colorized. History is persisted to localStorage so it survives reloads.
+    var TERM_HISTORY_KEY = 'kro_term_history';
+    var TERM_HISTORY_MAX = 200;
+    var termHistory = [];
+    var termHistoryIdx = -1;     // -1 means "at the live draft, not in history"
+    var termDraft = '';          // text saved when navigating into history
+    var termRunning = false;
+    var termSource = null;
+    var termActiveBlock = null;  // { cmd, outEl, exitEl, stdoutSpan, stderrSpan }
+    var termInput = null;
+    var termHighlight = null;
+    var termBlocks = null;
+
+    function loadTermHistory() {
+        try {
+            var raw = localStorage.getItem(TERM_HISTORY_KEY);
+            if (raw) termHistory = JSON.parse(raw) || [];
+        } catch (_) { termHistory = []; }
+    }
+    function saveTermHistory() {
+        try { localStorage.setItem(TERM_HISTORY_KEY, JSON.stringify(termHistory.slice(-TERM_HISTORY_MAX))); }
+        catch (_) {}
+    }
+    function pushTermHistory(cmd) {
+        if (!cmd) return;
+        if (termHistory.length && termHistory[termHistory.length - 1] === cmd) return;
+        termHistory.push(cmd);
+        if (termHistory.length > TERM_HISTORY_MAX) termHistory = termHistory.slice(-TERM_HISTORY_MAX);
+        saveTermHistory();
+    }
+
+    // Token classes:
+    //   verb       — first arg in the command (get/describe/logs/apply/...)
+    //   flag       — --foo or -x (possibly with =value)
+    //   string     — single/double-quoted literal
+    //   number     — bare numeric literal
+    //   sep        — `--` end-of-flags marker
+    //   resource   — second arg (kind-ish, pods/deploy/svc/...) — colored softer
+    var TERM_VERB_RX = /^(get|describe|logs|apply|delete|create|edit|exec|run|scale|rollout|expose|port-forward|cp|top|drain|cordon|uncordon|taint|label|annotate|patch|replace|set|config|wait|auth|api-resources|api-versions|cluster-info|completion|explain|version|debug|attach|proxy|diff|kustomize|certificate|alpha|plugin|events)$/;
+
+    // highlightTermLine returns colorized HTML for a single line of input.
+    // It's intentionally rough — kubectl's surface is large; this picks off
+    // the easy wins (flags, quoted strings, the verb, end-of-flags marker)
+    // without trying to be a full parser.
+    function highlightTermLine(line, isFirstLine) {
+        if (!line) return '';
+        var out = '';
+        var i = 0;
+        var sawNonWS = false;
+        var sawVerb = false;
+        while (i < line.length) {
+            var ch = line[i];
+            // whitespace
+            if (ch === ' ' || ch === '\t') {
+                var ws = '';
+                while (i < line.length && (line[i] === ' ' || line[i] === '\t')) { ws += line[i]; i++; }
+                out += ws;
+                continue;
+            }
+            // comment to end-of-line
+            if (ch === '#') {
+                out += '<span class="tk-comment">' + escapeHtml(line.slice(i)) + '</span>';
+                break;
+            }
+            // quoted string
+            if (ch === '"' || ch === "'") {
+                var q = ch;
+                var start = i;
+                i++;
+                while (i < line.length && line[i] !== q) {
+                    if (line[i] === '\\' && i + 1 < line.length) i++;
+                    i++;
+                }
+                if (i < line.length) i++; // consume closing quote
+                out += '<span class="tk-string">' + escapeHtml(line.slice(start, i)) + '</span>';
+                sawNonWS = true;
+                continue;
+            }
+            // flag (-x or --foo, possibly =value)
+            if (ch === '-' && (i + 1 < line.length) && line[i + 1] !== ' ') {
+                var fStart = i;
+                while (i < line.length && line[i] !== ' ' && line[i] !== '\t' && line[i] !== '=') i++;
+                var flag = line.slice(fStart, i);
+                if (flag === '--') {
+                    out += '<span class="tk-sep">--</span>';
+                } else {
+                    out += '<span class="tk-flag">' + escapeHtml(flag) + '</span>';
+                }
+                if (i < line.length && line[i] === '=') {
+                    out += '=';
+                    i++;
+                    // value: may be quoted or bare
+                    if (i < line.length && (line[i] === '"' || line[i] === "'")) continue; // loop picks up quote
+                    var vStart = i;
+                    while (i < line.length && line[i] !== ' ' && line[i] !== '\t') i++;
+                    out += '<span class="tk-string">' + escapeHtml(line.slice(vStart, i)) + '</span>';
+                }
+                sawNonWS = true;
+                continue;
+            }
+            // bare token
+            var tStart = i;
+            while (i < line.length && line[i] !== ' ' && line[i] !== '\t') i++;
+            var tok = line.slice(tStart, i);
+            if (!sawVerb && isFirstLine && TERM_VERB_RX.test(tok)) {
+                out += '<span class="tk-verb">' + escapeHtml(tok) + '</span>';
+                sawVerb = true;
+            } else if (/^-?\d+(\.\d+)?$/.test(tok)) {
+                out += '<span class="tk-number">' + escapeHtml(tok) + '</span>';
+            } else if (sawVerb && sawNonWS === false) {
+                // (won't actually hit — sawNonWS would be true after the verb)
+                out += escapeHtml(tok);
+            } else if (sawVerb) {
+                out += '<span class="tk-resource">' + escapeHtml(tok) + '</span>';
+                sawVerb = false; // only first arg after verb gets resource color
+            } else {
+                out += escapeHtml(tok);
+            }
+            sawNonWS = true;
+        }
+        return out;
+    }
+
+    function refreshTermHighlight() {
+        if (!termInput || !termHighlight) return;
+        var text = termInput.value;
+        var lines = text.split('\n');
+        var html = '';
+        for (var i = 0; i < lines.length; i++) {
+            if (i > 0) html += '\n';
+            html += highlightTermLine(lines[i], i === 0);
+        }
+        // Trailing newline needs a non-empty span or browsers collapse the
+        // last visual row, leaving the caret hovering on nothing visible.
+        if (text.endsWith('\n')) html += ' ';
+        termHighlight.innerHTML = html;
+    }
+
+    function autosizeTermInput() {
+        if (!termInput) return;
+        termInput.style.height = 'auto';
+        var h = Math.min(termInput.scrollHeight, 220);
+        termInput.style.height = h + 'px';
+        if (termHighlight) termHighlight.style.height = h + 'px';
+    }
+
+    function updateTermTarget() {
+        var el = document.getElementById('term-target');
+        if (!el) return;
+        el.textContent = (currentCtx || '?') + ' / ' + (currentNs || '?');
+    }
+
+    function termAppendBlock(cmd) {
+        if (!termBlocks) return null;
+        var empty = termBlocks.querySelector('.term-empty');
+        if (empty) empty.remove();
+
+        var block = document.createElement('div');
+        block.className = 'term-block';
+
+        var cmdRow = document.createElement('div');
+        cmdRow.className = 'term-block-cmd';
+        cmdRow.innerHTML =
+            '<span class="term-prompt-mini">$ kubectl</span>' +
+            '<span class="term-cmd-text">' + highlightTermLine(cmd, true) + '</span>' +
+            '<span class="term-exit running">running…</span>';
+        block.appendChild(cmdRow);
+
+        var out = document.createElement('pre');
+        out.className = 'term-block-out';
+        block.appendChild(out);
+
+        termBlocks.appendChild(block);
+        termBlocks.scrollTop = termBlocks.scrollHeight;
+
+        return {
+            cmd: cmd,
+            cmdRow: cmdRow,
+            outEl: out,
+            exitEl: cmdRow.querySelector('.term-exit')
+        };
+    }
+
+    function termAppendOutput(block, kind, line) {
+        if (!block) return;
+        var atBottom = (termBlocks.scrollHeight - termBlocks.scrollTop - termBlocks.clientHeight) < 30;
+        var span = document.createElement('span');
+        span.className = kind === 'stderr' ? 'term-stderr' : (kind === 'info' ? 'term-info' : '');
+        span.textContent = (line || '') + '\n';
+        block.outEl.appendChild(span);
+        if (atBottom) termBlocks.scrollTop = termBlocks.scrollHeight;
+    }
+
+    function termFinalize(block, exitCode, canceled) {
+        if (!block) return;
+        var ex = block.exitEl;
+        if (!ex) return;
+        ex.classList.remove('running');
+        if (canceled) {
+            ex.classList.add('canceled');
+            ex.textContent = 'canceled';
+        } else if (exitCode === 0) {
+            ex.classList.add('ok');
+            ex.textContent = 'exit 0';
+        } else {
+            ex.classList.add('bad');
+            ex.textContent = 'exit ' + exitCode;
+        }
+    }
+
+    function termClose() {
+        if (termSource) {
+            try { termSource.close(); } catch (_) {}
+            termSource = null;
+        }
+    }
+
+    window.termCancel = function() {
+        if (!termRunning) return;
+        termClose();
+        termFinalize(termActiveBlock, 130, true);
+        termActiveBlock = null;
+        termSetRunning(false);
+    };
+
+    window.termClear = function() {
+        if (!termBlocks) return;
+        termBlocks.innerHTML = '<div class="term-empty">kubectl output appears here. Try: get pods</div>';
+    };
+
+    function termSetRunning(running) {
+        termRunning = running;
+        var runBtn = document.getElementById('term-run');
+        var cancelBtn = document.getElementById('term-cancel');
+        if (runBtn) runBtn.disabled = running;
+        if (cancelBtn) cancelBtn.classList.toggle('active', running);
+        if (termInput) termInput.readOnly = running;
+    }
+
+    window.termRun = function() {
+        if (termRunning || !termInput) return;
+        var cmd = termInput.value.trim();
+        if (!cmd) return;
+
+        // If the terminal section is collapsed, expand it so the user sees output.
+        var section = document.querySelector('[data-section="terminal"]');
+        if (section && section.classList.contains('collapsed')) {
+            window.toggleSection('terminal');
+        }
+
+        pushTermHistory(cmd);
+        termHistoryIdx = -1;
+        termDraft = '';
+
+        termActiveBlock = termAppendBlock(cmd);
+        termSetRunning(true);
+
+        // Clear the editor for the next command.
+        termInput.value = '';
+        refreshTermHighlight();
+        autosizeTermInput();
+
+        termClose();
+        termSource = new EventSource('/sse/term?cmd=' + encodeURIComponent(cmd));
+        var block = termActiveBlock;
+
+        termSource.addEventListener('stdout', function(e) { termAppendOutput(block, 'stdout', e.data); });
+        termSource.addEventListener('stderr', function(e) { termAppendOutput(block, 'stderr', e.data); });
+        termSource.addEventListener('done', function(e) {
+            var code = parseInt(e.data, 10);
+            if (isNaN(code)) code = -1;
+            termFinalize(block, code, false);
+            termActiveBlock = null;
+            termSetRunning(false);
+            termClose();
+        });
+        termSource.onerror = function() {
+            // EventSource will retry; only treat as failure if we never saw 'done'.
+            // If the process is still running on the server, retries are fine —
+            // but if the server already closed (done sent), retries are noise.
+            if (!termRunning) { termClose(); return; }
+        };
+    };
+
+    function navigateTermHistory(direction) {
+        if (!termInput || termHistory.length === 0) return false;
+        if (termHistoryIdx === -1 && direction < 0) {
+            termDraft = termInput.value;
+            termHistoryIdx = termHistory.length - 1;
+        } else if (termHistoryIdx === -1 && direction > 0) {
+            return false;
+        } else {
+            var next = termHistoryIdx + direction;
+            if (next < 0) next = 0;
+            if (next >= termHistory.length) {
+                termHistoryIdx = -1;
+                termInput.value = termDraft;
+                refreshTermHighlight();
+                autosizeTermInput();
+                // Move caret to end
+                termInput.selectionStart = termInput.selectionEnd = termInput.value.length;
+                return true;
+            }
+            termHistoryIdx = next;
+        }
+        termInput.value = termHistory[termHistoryIdx] || '';
+        refreshTermHighlight();
+        autosizeTermInput();
+        termInput.selectionStart = termInput.selectionEnd = termInput.value.length;
+        return true;
+    }
+
+    function caretOnFirstLine(el) {
+        var v = el.value;
+        var s = el.selectionStart;
+        return v.indexOf('\n') === -1 || s <= v.indexOf('\n');
+    }
+    function caretOnLastLine(el) {
+        var v = el.value;
+        var s = el.selectionStart;
+        return v.lastIndexOf('\n') === -1 || s > v.lastIndexOf('\n');
+    }
+
+    function onTermKeydown(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            window.termRun();
+            return;
+        }
+        if (e.key === 'Escape') {
+            if (termRunning) { e.preventDefault(); window.termCancel(); }
+            return;
+        }
+        if (e.key === 'ArrowUp' && caretOnFirstLine(termInput)) {
+            if (navigateTermHistory(-1)) e.preventDefault();
+            return;
+        }
+        if (e.key === 'ArrowDown' && caretOnLastLine(termInput)) {
+            if (navigateTermHistory(1)) e.preventDefault();
+            return;
+        }
+        if (e.key === 'l' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            window.termClear();
+            return;
+        }
+    }
+
+    function onTermInput() {
+        // Any manual edit invalidates the "browsing history" state.
+        if (termHistoryIdx !== -1) {
+            termHistoryIdx = -1;
+            termDraft = '';
+        }
+        refreshTermHighlight();
+        autosizeTermInput();
+    }
+
+    function onTermScroll() {
+        // Keep the highlight overlay scrolled in sync with the textarea so
+        // long lines align even when the user scrolls horizontally inside it.
+        if (termHighlight && termInput) {
+            termHighlight.scrollTop = termInput.scrollTop;
+            termHighlight.scrollLeft = termInput.scrollLeft;
+        }
+    }
+
+    function initTerminal() {
+        termInput = document.getElementById('term-input');
+        termHighlight = document.getElementById('term-highlight');
+        termBlocks = document.getElementById('term-blocks');
+        if (!termInput || !termHighlight || !termBlocks) return;
+
+        loadTermHistory();
+        updateTermTarget();
+
+        // Restore expanded/collapsed state from localStorage (default: collapsed).
+        var section = document.getElementById('term-section');
+        if (section && !isCollapsed('terminal')) {
+            section.classList.remove('collapsed');
+        }
+
+        termInput.addEventListener('keydown', onTermKeydown);
+        termInput.addEventListener('input', onTermInput);
+        termInput.addEventListener('scroll', onTermScroll);
+        // Sync overlay when the textarea is focused/clicked too — handles
+        // browsers that don't fire 'scroll' on every caret move.
+        termInput.addEventListener('click', onTermScroll);
+        termInput.addEventListener('keyup', onTermScroll);
+
+        refreshTermHighlight();
+        autosizeTermInput();
+    }
+
     // ===== Init =====
     document.addEventListener('DOMContentLoaded', function() {
         initDarkMode();
@@ -1218,10 +1621,13 @@
             }, 100);
         });
 
+        initTerminal();
+
         // Initial bootstrap: load contexts → namespaces → resources → SSE.
         loadContexts().then(function() {
             return loadNamespaces();
         }).then(function() {
+            updateTermTarget();
             refreshResources();
             initResourcesStream();
         });

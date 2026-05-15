@@ -14,6 +14,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+const termCmdMaxLen = 4096
+
 const snapshotInterval = 10 * time.Second
 
 // SSE streams resource-tree snapshots for the cookie-selected (context,
@@ -134,6 +136,99 @@ func (h *handlers) LogsSSE(svr *rweb.Server) rweb.Handler {
 
 		go produceLogStream(streamCtx, client, sel.Namespace, name, hub)
 		return nil
+	}
+}
+
+// TermSSE runs `kubectl --context --namespace <cmd>` and streams its
+// stdout/stderr line-by-line to the browser as SSE events:
+//
+//	event: stdout|stderr  → data: "<line>"
+//	event: done           → data: "<exit-code>"
+//
+// Disconnect cancels the underlying process via context, matching LogsSSE.
+func (h *handlers) TermSSE(svr *rweb.Server) rweb.Handler {
+	return func(c rweb.Context) error {
+		raw := c.Request().QueryParam("cmd")
+		if raw == "" {
+			return writeTextErr(c, 400, "cmd is required")
+		}
+		if len(raw) > termCmdMaxLen {
+			return writeTextErr(c, 400, "cmd too long")
+		}
+		args, err := kube.TokenizeArgs(raw)
+		if err != nil {
+			return writeTextErr(c, 400, err.Error())
+		}
+		if len(args) == 0 {
+			return writeTextErr(c, 400, "empty command")
+		}
+
+		sel, err := h.resolve(c)
+		if err != nil {
+			return writeTextErr(c, 503, err.Error())
+		}
+
+		streamCtx, cancel := context.WithCancel(context.Background())
+
+		var hub *rweb.SSEHub
+		hub = rweb.NewSSEHub(rweb.SSEHubOptions{
+			ChannelSize:       256,
+			HeartbeatInterval: 30 * time.Second,
+			OnDisconnect: func() {
+				cancel()
+				if hub != nil {
+					hub.Close()
+				}
+			},
+		})
+
+		setupErr := hub.Handler(svr, "stdout")(c)
+		if setupErr != nil {
+			cancel()
+			hub.Close()
+			return setupErr
+		}
+
+		go produceTermStream(streamCtx, sel.Context, sel.Namespace, args, hub)
+		return nil
+	}
+}
+
+func produceTermStream(ctx context.Context, ctxName, ns string, args []string, hub *rweb.SSEHub) {
+	events := make(chan kube.TermEvent, 64)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		kube.RunKubectl(ctx, ctxName, ns, args, events)
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev := <-events:
+			switch ev.Stream {
+			case "done":
+				hub.BroadcastRaw(rweb.SSEvent{Type: "done", Data: fmt.Sprintf("%d", ev.ExitCode)})
+			default:
+				hub.BroadcastRaw(rweb.SSEvent{Type: ev.Stream, Data: ev.Line})
+			}
+		case <-done:
+			// Drain any remaining buffered events before returning.
+			for {
+				select {
+				case ev := <-events:
+					switch ev.Stream {
+					case "done":
+						hub.BroadcastRaw(rweb.SSEvent{Type: "done", Data: fmt.Sprintf("%d", ev.ExitCode)})
+					default:
+						hub.BroadcastRaw(rweb.SSEvent{Type: ev.Stream, Data: ev.Line})
+					}
+				default:
+					return
+				}
+			}
+		}
 	}
 }
 
