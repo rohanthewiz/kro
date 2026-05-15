@@ -923,13 +923,40 @@ body.dark .log-msg-err {
 }
 
 .term-blocks {
-    max-height: 360px;
+    height: 360px;
     overflow-y: auto;
     padding: 12px 14px 6px;
     font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
     font-size: 0.78rem;
     line-height: 1.45;
 }
+
+/* Drag handle that sits below the input row. Dragging up/down resizes the
+   .term-blocks pane above. Persisted height lives in localStorage. */
+.term-resizer {
+    flex: 0 0 auto;
+    height: 8px;
+    background: #11141d;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    cursor: ns-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    transition: background 0.12s;
+}
+.term-resizer:hover,
+.term-resizer.dragging { background: #1d2740; }
+.term-resizer-grip {
+    width: 36px;
+    height: 3px;
+    border-radius: 2px;
+    background: #3b4a6b;
+}
+.term-resizer:hover .term-resizer-grip,
+.term-resizer.dragging .term-resizer-grip { background: #74b9ff; }
+body.term-resizing { cursor: ns-resize; user-select: none; }
+body.term-resizing * { cursor: ns-resize !important; }
 
 .term-empty {
     color: #6c7a93;
@@ -938,24 +965,76 @@ body.dark .log-msg-err {
 }
 
 .term-block {
-    padding: 6px 0 8px;
+    padding: 4px 0 6px;
     border-bottom: 1px solid rgba(255,255,255,0.05);
 }
 .term-block:last-child { border-bottom: none; }
 
 .term-block-cmd {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 8px;
-    white-space: pre-wrap;
-    word-break: break-word;
+    white-space: nowrap;
 }
+.term-block-cmd .term-fold {
+    flex: 0 0 auto;
+    width: 14px;
+    text-align: center;
+    color: #6c7a93;
+    cursor: pointer;
+    user-select: none;
+    font-size: 0.7rem;
+    line-height: 1;
+    transition: transform 0.15s ease-out, color 0.12s;
+    transform-origin: 50% 55%;
+}
+.term-block-cmd .term-fold:hover { color: #74b9ff; }
+.term-block.folded .term-fold { transform: rotate(-90deg); }
+.term-block.folded .term-block-out,
+.term-block.folded .term-blk-search { display: none; }
 .term-block-cmd .term-prompt-mini {
     color: #6ada8e;
     font-weight: 600;
     flex: 0 0 auto;
 }
-.term-block-cmd .term-cmd-text { color: #d8e1f3; flex: 1 1 auto; }
+.term-block-cmd .term-cmd-text {
+    color: #d8e1f3;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Inline per-block toolbar: search/font/copy buttons share the command row. */
+.term-blk-tools {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 2px;
+}
+.term-blk-btn {
+    background: transparent;
+    border: 1px solid #2d3650;
+    color: #8395a7;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    line-height: 1.1;
+    padding: 1px 6px;
+    min-width: 22px;
+    height: 18px;
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s, background 0.12s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+}
+.term-blk-btn:hover { color: #74b9ff; border-color: #74b9ff; }
+.term-blk-btn.on { background: #54a0ff; color: #16213e; border-color: #54a0ff; }
+.term-blk-btn svg { display: block; }
 .term-block-cmd .term-exit {
     flex: 0 0 auto;
     font-size: 0.7rem;
@@ -970,18 +1049,82 @@ body.dark .log-msg-err {
 .term-block-cmd .term-exit.running { background: #0a96a6; }
 .term-block-cmd .term-exit.canceled{ background: #b6701a; }
 
+/* Each block's output is its own scroll area so the command row stays put as
+   the user scrolls long output. The user can drag the bottom-right corner
+   (resize: vertical) to grow an individual block. */
 .term-block-out {
-    margin: 4px 0 0 0;
-    padding: 0;
+    margin: 6px 0 0 14px;
+    padding: 6px 10px;
+    background: rgba(0,0,0,0.22);
+    border-left: 2px solid #2d3650;
+    border-radius: 0 4px 4px 0;
+    max-height: 280px;
+    overflow: auto;
+    resize: vertical;
+    min-height: 0;
+    color: #e0e6ed;
+    font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
+    font-size: 0.78rem;
+    line-height: 1.45;
     white-space: pre-wrap;
     word-break: break-word;
-    background: none;
-    border: none;
-    color: #e0e6ed;
-    font: inherit;
 }
+.term-block-out:empty { display: none; }
 .term-block-out .term-stderr { color: #ff8a8a; }
 .term-block-out .term-info { color: #74b9ff; font-style: italic; }
+
+/* Lazy per-block find bar — built on first search-toggle click. Styled for the
+   dark terminal background, distinct from the modal's lighter bar. */
+.term-blk-search {
+    display: none;
+    align-items: center;
+    gap: 5px;
+    margin: 6px 0 0 14px;
+    padding: 5px 8px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid #2d3650;
+    border-radius: 6px;
+}
+.term-blk-search.active { display: flex; }
+.term-blk-search-input {
+    flex: 1;
+    min-width: 80px;
+    padding: 3px 7px;
+    border: 1px solid #2d3650;
+    border-radius: 4px;
+    font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
+    font-size: 0.78rem;
+    background: #0f1320;
+    color: #e0e6ed;
+    outline: none;
+}
+.term-blk-search-input:focus { border-color: #54a0ff; }
+.term-blk-search-opt,
+.term-blk-search-nav,
+.term-blk-search-close {
+    background: transparent;
+    border: 1px solid #2d3650;
+    border-radius: 4px;
+    color: #8395a7;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 1px 6px;
+    line-height: 1.2;
+    user-select: none;
+    min-width: 24px;
+}
+.term-blk-search-opt:hover,
+.term-blk-search-nav:hover,
+.term-blk-search-close:hover { color: #74b9ff; border-color: #74b9ff; }
+.term-blk-search-opt.on { background: #54a0ff; color: #16213e; border-color: #54a0ff; }
+.term-blk-search-count {
+    font-size: 0.7rem;
+    color: #8395a7;
+    min-width: 50px;
+    text-align: right;
+}
+.term-blk-search-count.error { color: #ff6b6b; }
 
 .term-input-row {
     display: flex;

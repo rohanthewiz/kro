@@ -95,6 +95,9 @@ func terminalSection(b *element.Builder) any {
 				),
 				b.Button("type", "button", "class", "term-run", "id", "term-run", "title", "Run (Enter)", "onclick", "termRun()").T("▶"),
 			),
+			b.Div("class", "term-resizer", "id", "term-resizer", "title", "Drag to resize terminal").R(
+				b.DivClass("term-resizer-grip").R(),
+			),
 		),
 	)
 	return nil

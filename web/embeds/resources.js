@@ -711,8 +711,8 @@
         }
     }
 
-    function highlightMatchesIn(root) {
-        var rx = buildSearchRegex();
+    function highlightMatchesIn(root, rxOverride) {
+        var rx = rxOverride || buildSearchRegex();
         if (!rx) return 0;
         var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
             acceptNode: function(n) {
@@ -1358,6 +1358,20 @@
         el.textContent = (currentCtx || '?') + ' / ' + (currentNs || '?');
     }
 
+    // Per-block toolbar: search toggle, font −/+, copy. Sits on the same line as
+    // the command. SVG search icon mirrors the modal's so the action is obvious.
+    var TERM_BLK_TOOLBAR_HTML =
+        '<span class="term-blk-tools">' +
+            '<button type="button" class="term-blk-btn term-blk-search-toggle" data-act="search" title="Search output (Ctrl+F)" aria-label="Search output">' +
+                '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+                    '<circle cx="7" cy="7" r="5"></circle><line x1="11" y1="11" x2="14.5" y2="14.5"></line>' +
+                '</svg>' +
+            '</button>' +
+            '<button type="button" class="term-blk-btn" data-act="font-down" title="Smaller text">A−</button>' +
+            '<button type="button" class="term-blk-btn" data-act="font-up" title="Larger text">A+</button>' +
+            '<button type="button" class="term-blk-btn" data-act="copy" title="Copy output">⧉</button>' +
+        '</span>';
+
     function termAppendBlock(cmd) {
         if (!termBlocks) return null;
         var empty = termBlocks.querySelector('.term-empty');
@@ -1369,9 +1383,11 @@
         var cmdRow = document.createElement('div');
         cmdRow.className = 'term-block-cmd';
         cmdRow.innerHTML =
+            '<span class="term-fold" title="Fold/unfold output">▾</span>' +
             '<span class="term-prompt-mini">$ kubectl</span>' +
-            '<span class="term-cmd-text">' + highlightTermLine(cmd, true) + '</span>' +
-            '<span class="term-exit running">running…</span>';
+            '<span class="term-cmd-text" title="' + escapeHtml(cmd) + '">' + highlightTermLine(cmd, true) + '</span>' +
+            '<span class="term-exit running">running…</span>' +
+            TERM_BLK_TOOLBAR_HTML;
         block.appendChild(cmdRow);
 
         var out = document.createElement('pre');
@@ -1381,22 +1397,223 @@
         termBlocks.appendChild(block);
         termBlocks.scrollTop = termBlocks.scrollHeight;
 
+        applyTermBlockFont(out);
+
         return {
             cmd: cmd,
+            el: block,
             cmdRow: cmdRow,
             outEl: out,
-            exitEl: cmdRow.querySelector('.term-exit')
+            exitEl: cmdRow.querySelector('.term-exit'),
+            searchCtl: null
         };
+    }
+
+    // Click handlers (delegated on .term-blocks): fold chevron, search toggle,
+    // font −/+, copy. Works for blocks added later via SSE.
+    function onTermBlockClick(e) {
+        var t = e.target;
+        if (!t || !t.closest) return;
+
+        var fold = t.closest('.term-fold');
+        if (fold) {
+            var fblock = fold.closest('.term-block');
+            if (fblock) fblock.classList.toggle('folded');
+            return;
+        }
+
+        var btn = t.closest('.term-blk-btn');
+        if (!btn) return;
+        var blockEl = btn.closest('.term-block');
+        if (!blockEl) return;
+        var act = btn.getAttribute('data-act');
+        if (act === 'search') {
+            var ctl = ensureBlockSearch(blockEl);
+            if (ctl) ctl.toggle();
+        } else if (act === 'font-down') {
+            adjustTermBlockFont(-1);
+        } else if (act === 'font-up') {
+            adjustTermBlockFont(1);
+        } else if (act === 'copy') {
+            copyBlockOutput(blockEl, btn);
+        }
+    }
+
+    function copyBlockOutput(blockEl, btn) {
+        var out = blockEl.querySelector('.term-block-out');
+        if (!out) return;
+        var orig = btn.innerHTML;
+        navigator.clipboard.writeText(out.textContent || '').then(function() {
+            btn.innerHTML = '✓';
+            setTimeout(function() { btn.innerHTML = orig; }, 900);
+        }).catch(function() {
+            btn.innerHTML = '!';
+            setTimeout(function() { btn.innerHTML = orig; }, 900);
+        });
+    }
+
+    // ----- Per-block font size (persisted globally for all blocks) -----
+    var TERM_FONT_KEY = 'kro_term_block_font_px';
+    var TERM_FONT_MIN = 9, TERM_FONT_MAX = 22, TERM_FONT_DEFAULT = 12;
+
+    function getTermBlockFont() {
+        var v = parseInt(localStorage.getItem(TERM_FONT_KEY), 10);
+        if (isNaN(v)) return TERM_FONT_DEFAULT;
+        return Math.max(TERM_FONT_MIN, Math.min(TERM_FONT_MAX, v));
+    }
+    function applyTermBlockFont(el) {
+        if (el) el.style.fontSize = getTermBlockFont() + 'px';
+    }
+    function adjustTermBlockFont(delta) {
+        var s = Math.max(TERM_FONT_MIN, Math.min(TERM_FONT_MAX, getTermBlockFont() + delta));
+        localStorage.setItem(TERM_FONT_KEY, String(s));
+        var outs = (termBlocks || document).querySelectorAll('.term-block-out');
+        for (var i = 0; i < outs.length; i++) outs[i].style.fontSize = s + 'px';
+    }
+
+    // ----- Per-block search controller (lazy) -----
+    // Stored on the block DOM element via a WeakMap-like data attribute so SSE
+    // appends can find the controller and incrementally highlight new lines.
+    var blockSearchByEl = new WeakMap();
+
+    function ensureBlockSearch(blockEl) {
+        var existing = blockSearchByEl.get(blockEl);
+        if (existing) return existing;
+
+        var outEl = blockEl.querySelector('.term-block-out');
+        if (!outEl) return null;
+
+        var bar = document.createElement('div');
+        bar.className = 'term-blk-search';
+        bar.innerHTML =
+            '<input type="text" class="term-blk-search-input" placeholder="Find in output…" autocomplete="off" spellcheck="false">' +
+            '<button type="button" class="term-blk-search-opt" data-opt="case" title="Match case">Aa</button>' +
+            '<button type="button" class="term-blk-search-opt" data-opt="word" title="Whole word"><u>W</u></button>' +
+            '<button type="button" class="term-blk-search-opt" data-opt="regex" title="Regular expression">.*</button>' +
+            '<span class="term-blk-search-count"></span>' +
+            '<button type="button" class="term-blk-search-nav" data-nav="-1" title="Previous (Shift+Enter)">↑</button>' +
+            '<button type="button" class="term-blk-search-nav" data-nav="1" title="Next (Enter)">↓</button>' +
+            '<button type="button" class="term-blk-search-close" title="Close (Esc)">×</button>';
+        blockEl.insertBefore(bar, outEl);
+
+        var input = bar.querySelector('.term-blk-search-input');
+        var countEl = bar.querySelector('.term-blk-search-count');
+        var st = { open: false, query: '', caseSensitive: false, wholeWord: false, regex: false, matchCount: 0, currentIndex: 0, invalidRegex: false };
+
+        function buildRx() {
+            if (!st.query) return null;
+            var flags = st.caseSensitive ? 'g' : 'gi';
+            try {
+                if (st.regex) return new RegExp(st.query, flags);
+                var pat = st.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                if (st.wholeWord) pat = '\\b' + pat + '\\b';
+                return new RegExp(pat, flags);
+            } catch (_) { return false; }
+        }
+        function refreshCount() {
+            if (st.invalidRegex) { countEl.textContent = 'invalid regex'; countEl.classList.add('error'); return; }
+            countEl.classList.remove('error');
+            if (!st.query) { countEl.textContent = ''; return; }
+            if (st.matchCount === 0) { countEl.textContent = 'no matches'; return; }
+            countEl.textContent = (st.currentIndex + 1) + ' / ' + st.matchCount;
+        }
+        function navigate(delta, wrap) {
+            var marks = outEl.querySelectorAll('mark.log-match');
+            if (!marks.length) return;
+            var cur = -1;
+            for (var i = 0; i < marks.length; i++) {
+                if (marks[i].classList.contains('current')) { cur = i; break; }
+            }
+            var nx;
+            if (cur === -1) nx = delta >= 0 ? 0 : marks.length - 1;
+            else {
+                nx = cur + delta;
+                if (wrap !== false) nx = ((nx % marks.length) + marks.length) % marks.length;
+                else nx = Math.max(0, Math.min(marks.length - 1, nx));
+                marks[cur].classList.remove('current');
+            }
+            marks[nx].classList.add('current');
+            marks[nx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+            st.currentIndex = nx;
+            refreshCount();
+        }
+        function run() {
+            clearSearchMarks(outEl);
+            st.invalidRegex = false; st.matchCount = 0; st.currentIndex = 0;
+            if (!st.query) { refreshCount(); return; }
+            var rx = buildRx();
+            if (rx === false) { st.invalidRegex = true; refreshCount(); return; }
+            st.matchCount = highlightMatchesIn(outEl, rx);
+            refreshCount();
+            if (st.matchCount > 0) navigate(0, false);
+        }
+
+        input.addEventListener('input', function() { st.query = input.value || ''; run(); });
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); navigate(e.shiftKey ? -1 : 1, true); }
+            else if (e.key === 'Escape') { e.preventDefault(); ctl.close(); }
+        });
+        var optBtns = bar.querySelectorAll('.term-blk-search-opt');
+        for (var i = 0; i < optBtns.length; i++) {
+            (function(b) {
+                b.addEventListener('click', function() {
+                    var k = b.getAttribute('data-opt');
+                    var prop = k === 'case' ? 'caseSensitive' : k === 'word' ? 'wholeWord' : 'regex';
+                    st[prop] = !st[prop];
+                    b.classList.toggle('on', st[prop]);
+                    run();
+                });
+            })(optBtns[i]);
+        }
+        var navBtns = bar.querySelectorAll('.term-blk-search-nav');
+        for (var j = 0; j < navBtns.length; j++) {
+            (function(b) {
+                b.addEventListener('click', function() { navigate(parseInt(b.getAttribute('data-nav'), 10), true); });
+            })(navBtns[j]);
+        }
+        bar.querySelector('.term-blk-search-close').addEventListener('click', function() { ctl.close(); });
+
+        var toggleBtn = blockEl.querySelector('.term-blk-search-toggle');
+        var ctl = {
+            open: function() {
+                st.open = true;
+                bar.classList.add('active');
+                if (toggleBtn) toggleBtn.classList.add('on');
+                input.focus(); input.select();
+                run();
+            },
+            close: function() {
+                st.open = false;
+                bar.classList.remove('active');
+                if (toggleBtn) toggleBtn.classList.remove('on');
+                clearSearchMarks(outEl);
+            },
+            toggle: function() { st.open ? ctl.close() : ctl.open(); },
+            isOpen: function() { return st.open; },
+            onAppend: function(scope) {
+                if (!st.open || !st.query) return;
+                var rx = buildRx();
+                if (!rx || rx === false) return;
+                var added = highlightMatchesIn(scope || outEl, rx);
+                if (added > 0) { st.matchCount += added; refreshCount(); }
+            }
+        };
+        blockSearchByEl.set(blockEl, ctl);
+        return ctl;
     }
 
     function termAppendOutput(block, kind, line) {
         if (!block) return;
-        var atBottom = (termBlocks.scrollHeight - termBlocks.scrollTop - termBlocks.clientHeight) < 30;
+        var out = block.outEl;
+        var atBottom = (out.scrollHeight - out.scrollTop - out.clientHeight) < 30;
         var span = document.createElement('span');
-        span.className = kind === 'stderr' ? 'term-stderr' : (kind === 'info' ? 'term-info' : '');
-        span.textContent = (line || '') + '\n';
-        block.outEl.appendChild(span);
-        if (atBottom) termBlocks.scrollTop = termBlocks.scrollHeight;
+        if (kind === 'stderr') span.className = 'term-stderr';
+        else if (kind === 'info') span.className = 'term-info';
+        span.innerHTML = highlightLogLine(line || '') + '\n';
+        out.appendChild(span);
+        var ctl = blockSearchByEl.get(block.el);
+        if (ctl) ctl.onAppend(span);
+        if (atBottom) out.scrollTop = out.scrollHeight;
     }
 
     function termFinalize(block, exitCode, canceled) {
@@ -1573,6 +1790,75 @@
         }
     }
 
+    // Splitter that lets the user drag to resize the .term-blocks pane.
+    // Height persists across reloads in localStorage under TERM_HEIGHT_KEY.
+    var TERM_HEIGHT_KEY = 'kro_term_height';
+    var TERM_HEIGHT_MIN = 80;
+
+    function termHeightMax() {
+        // Cap at most of the viewport so the user can't drag the pane offscreen.
+        return Math.max(TERM_HEIGHT_MIN + 40, Math.floor(window.innerHeight * 0.8));
+    }
+
+    function applyTermHeight(h) {
+        if (!termBlocks) return;
+        h = Math.max(TERM_HEIGHT_MIN, Math.min(termHeightMax(), Math.round(h)));
+        termBlocks.style.height = h + 'px';
+        return h;
+    }
+
+    function initTermResizer() {
+        var resizer = document.getElementById('term-resizer');
+        if (!resizer || !termBlocks) return;
+
+        var saved = parseInt(localStorage.getItem(TERM_HEIGHT_KEY), 10);
+        if (saved > 0) applyTermHeight(saved);
+
+        var dragging = false;
+        var startY = 0;
+        var startH = 0;
+
+        function onMove(e) {
+            if (!dragging) return;
+            var y = (e.touches && e.touches[0]) ? e.touches[0].clientY : e.clientY;
+            var dy = y - startY;
+            applyTermHeight(startH + dy);
+            e.preventDefault();
+        }
+        function onUp() {
+            if (!dragging) return;
+            dragging = false;
+            resizer.classList.remove('dragging');
+            document.body.classList.remove('term-resizing');
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            document.removeEventListener('touchmove', onMove);
+            document.removeEventListener('touchend', onUp);
+            var h = parseInt(termBlocks.style.height, 10);
+            if (h > 0) localStorage.setItem(TERM_HEIGHT_KEY, String(h));
+        }
+        function onDown(e) {
+            dragging = true;
+            startY = (e.touches && e.touches[0]) ? e.touches[0].clientY : e.clientY;
+            startH = termBlocks.getBoundingClientRect().height;
+            resizer.classList.add('dragging');
+            document.body.classList.add('term-resizing');
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+            document.addEventListener('touchmove', onMove, { passive: false });
+            document.addEventListener('touchend', onUp);
+            e.preventDefault();
+        }
+        resizer.addEventListener('mousedown', onDown);
+        resizer.addEventListener('touchstart', onDown, { passive: false });
+
+        // Double-click resets to the default height.
+        resizer.addEventListener('dblclick', function() {
+            termBlocks.style.height = '';
+            localStorage.removeItem(TERM_HEIGHT_KEY);
+        });
+    }
+
     function initTerminal() {
         termInput = document.getElementById('term-input');
         termHighlight = document.getElementById('term-highlight');
@@ -1595,6 +1881,9 @@
         // browsers that don't fire 'scroll' on every caret move.
         termInput.addEventListener('click', onTermScroll);
         termInput.addEventListener('keyup', onTermScroll);
+
+        initTermResizer();
+        termBlocks.addEventListener('click', onTermBlockClick);
 
         refreshTermHighlight();
         autosizeTermInput();
