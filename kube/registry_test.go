@@ -19,7 +19,7 @@ func newTestConfig() *api.Config {
 }
 
 func TestContextsAreSortedAndAnnotated(t *testing.T) {
-	reg := NewRegistry(newTestConfig())
+	reg := NewRegistry(newTestConfig(), nil)
 	ctxs := reg.Contexts()
 	if len(ctxs) != 2 {
 		t.Fatalf("want 2 contexts, got %d", len(ctxs))
@@ -42,7 +42,7 @@ func TestContextsAreSortedAndAnnotated(t *testing.T) {
 }
 
 func TestHasContextAndDefaultNamespace(t *testing.T) {
-	reg := NewRegistry(newTestConfig())
+	reg := NewRegistry(newTestConfig(), nil)
 	if !reg.HasContext("ctx-a") {
 		t.Error("HasContext(ctx-a) = false, want true")
 	}
@@ -58,14 +58,14 @@ func TestHasContextAndDefaultNamespace(t *testing.T) {
 }
 
 func TestClientErrorsOnUnknownContext(t *testing.T) {
-	reg := NewRegistry(newTestConfig())
+	reg := NewRegistry(newTestConfig(), nil)
 	if _, err := reg.Client("does-not-exist"); err == nil {
 		t.Error("Client(does-not-exist) returned no error")
 	}
 }
 
 func TestClientCachesPerContext(t *testing.T) {
-	reg := NewRegistry(newTestConfig())
+	reg := NewRegistry(newTestConfig(), nil)
 	c1, err := reg.Client("ctx-a")
 	if err != nil {
 		t.Fatalf("first Client(ctx-a): %v", err)

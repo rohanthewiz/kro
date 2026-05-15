@@ -3,7 +3,10 @@ package web
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"kro/kube"
 	"kro/state"
@@ -257,6 +260,51 @@ func (h *handlers) Delete(c rweb.Context) error {
 	}
 	logger.InfoF("deleted %s/%s in %s/%s", body.Kind, body.Name, sel.Context, sel.Namespace)
 	return c.WriteJSON(map[string]string{"status": "deleted"})
+}
+
+// MergeKubeconfig accepts a multipart upload (field "file") of a kubeconfig
+// snippet and merges it into the primary kubeconfig via `kubectl config view
+// --flatten`. On success, the in-memory registry is reloaded and the updated
+// contexts are returned.
+func (h *handlers) MergeKubeconfig(c rweb.Context) error {
+	file, header, err := c.Request().GetFormFile("file")
+	if err != nil {
+		return writeJSONErr(c, http.StatusBadRequest, serr.Wrap(err, "missing 'file' upload"))
+	}
+	defer file.Close()
+
+	tmp, err := os.CreateTemp("", "kro-kubeconfig-*.yaml")
+	if err != nil {
+		return writeJSONErr(c, http.StatusInternalServerError, serr.Wrap(err, "create temp file"))
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := io.Copy(tmp, file); err != nil {
+		tmp.Close()
+		return writeJSONErr(c, http.StatusInternalServerError, serr.Wrap(err, "save upload"))
+	}
+	if err := tmp.Close(); err != nil {
+		return writeJSONErr(c, http.StatusInternalServerError, serr.Wrap(err, "close temp file"))
+	}
+
+	backup, err := kube.MergeKubeconfig(tmpPath, h.reg.Paths())
+	if err != nil {
+		return writeJSONErr(c, http.StatusBadRequest, err)
+	}
+	if err := h.reg.Reload(); err != nil {
+		return writeJSONErr(c, http.StatusInternalServerError, serr.Wrap(err, "reload kubeconfig after merge"))
+	}
+
+	logger.InfoF("merged kubeconfig from upload %q into %s (backup=%s)",
+		filepath.Base(header.Filename), h.reg.PrimaryPath(), backup)
+
+	return c.WriteJSON(map[string]any{
+		"status":   "merged",
+		"primary":  h.reg.PrimaryPath(),
+		"backup":   backup,
+		"filename": header.Filename,
+		"contexts": h.reg.Contexts(),
+	})
 }
 
 // ----- helpers -----

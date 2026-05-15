@@ -45,6 +45,8 @@ func (h HeaderBar) Render(b *element.Builder) any {
 		),
 		b.DivClass("header-actions").R(
 			b.Span("id", "resources-sse-status", "class", "log-status disconnected").R(),
+			b.Input("type", "file", "id", "kubeconfig-merge-input", "accept", ".yaml,.yml,.conf,application/yaml,text/yaml", "style", "display:none").R(),
+			b.Button("class", "btn-reconnect", "id", "btn-kubeconfig-merge", "onclick", "promptMergeKubeconfig()", "title", "Merge a kubeconfig file into the existing config").T("⇪ Merge config"),
 			b.Button("class", "btn-reconnect", "onclick", "refreshResources()", "title", "Refresh").T("↻ Refresh"),
 			b.Button("class", "btn-dark-toggle", "id", "btn-dark-toggle", "onclick", "toggleDarkMode()").T("\U0001F319"),
 		),

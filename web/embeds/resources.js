@@ -2017,6 +2017,52 @@
         autosizeTermInput();
     }
 
+    // ===== Kubeconfig merge =====
+    window.promptMergeKubeconfig = function() {
+        var input = document.getElementById('kubeconfig-merge-input');
+        if (input) input.click();
+    };
+
+    function onKubeconfigSelected(ev) {
+        var input = ev.target;
+        var file = input.files && input.files[0];
+        if (!file) return;
+        var msg = 'Merge "' + file.name + '" into your kubeconfig?\n\n' +
+            'The existing file will be backed up with a timestamped suffix.';
+        if (!confirm(msg)) { input.value = ''; return; }
+
+        var btn = document.getElementById('btn-kubeconfig-merge');
+        var prevLabel = btn ? btn.textContent : '';
+        if (btn) { btn.disabled = true; btn.textContent = 'Merging…'; }
+
+        var form = new FormData();
+        form.append('file', file);
+        fetch('/api/kubeconfig/merge', { method: 'POST', body: form })
+            .then(function(r) { return r.json().then(function(j) { return { ok: r.ok, body: j }; }); })
+            .then(function(res) {
+                if (!res.ok || res.body.error) {
+                    alert('Merge failed: ' + (res.body.error || 'unknown error'));
+                    return;
+                }
+                var note = 'Merged into ' + res.body.primary;
+                if (res.body.backup) note += '\nBackup: ' + res.body.backup;
+                alert(note);
+                // Reload contexts dropdown so the new entries appear immediately.
+                loadContexts().then(function() {
+                    return loadNamespaces();
+                }).then(function() {
+                    updateTermTarget();
+                    refreshResources();
+                    initResourcesStream();
+                });
+            })
+            .catch(function(err) { alert('Merge failed: ' + err.message); })
+            .finally(function() {
+                input.value = '';
+                if (btn) { btn.disabled = false; btn.textContent = prevLabel; }
+            });
+    }
+
     // ===== Init =====
     document.addEventListener('DOMContentLoaded', function() {
         initDarkMode();
@@ -2026,6 +2072,8 @@
         document.getElementById('ns-select').addEventListener('change', onNamespaceChange);
         document.getElementById('btn-ns-add').addEventListener('click', showNsAddInput);
         document.getElementById('btn-ns-remove').addEventListener('click', onRemoveNamespace);
+        var mergeInput = document.getElementById('kubeconfig-merge-input');
+        if (mergeInput) mergeInput.addEventListener('change', onKubeconfigSelected);
         var addInput = document.getElementById('ns-add-input');
         addInput.addEventListener('keydown', function(e) {
             if (e.key === 'Enter') { e.preventDefault(); onAddNamespace(); }

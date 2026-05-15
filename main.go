@@ -41,7 +41,7 @@ func main() {
 	}
 	logger.InfoF("state file: %s", store.Path())
 
-	reg := kube.NewRegistry(raw)
+	reg := kube.NewRegistry(raw, paths)
 	srv := web.NewServer(cfg, reg, store)
 
 	logger.InfoF("kro listening on :%s (build=%s)", cfg.Port, BuildNumber)

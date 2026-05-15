@@ -29,7 +29,7 @@ func resolveWith(t *testing.T, reg *ClientRegistry, cookieHeader string) (Select
 }
 
 func TestSelectionFallsBackToCurrentContext(t *testing.T) {
-	reg := NewRegistry(newTestConfig())
+	reg := NewRegistry(newTestConfig(), nil)
 	sel, err := resolveWith(t, reg, "")
 	if err != nil {
 		t.Fatalf("ResolveSelection: %v", err)
@@ -43,7 +43,7 @@ func TestSelectionFallsBackToCurrentContext(t *testing.T) {
 }
 
 func TestSelectionUsesCookies(t *testing.T) {
-	reg := NewRegistry(newTestConfig())
+	reg := NewRegistry(newTestConfig(), nil)
 	sel, err := resolveWith(t, reg, "kro_ctx=ctx-b; kro_ns=kube-system")
 	if err != nil {
 		t.Fatalf("ResolveSelection: %v", err)
@@ -54,7 +54,7 @@ func TestSelectionUsesCookies(t *testing.T) {
 }
 
 func TestSelectionRejectsUnknownContextCookie(t *testing.T) {
-	reg := NewRegistry(newTestConfig())
+	reg := NewRegistry(newTestConfig(), nil)
 	sel, err := resolveWith(t, reg, "kro_ctx=does-not-exist")
 	if err != nil {
 		t.Fatalf("ResolveSelection: %v", err)
@@ -65,7 +65,7 @@ func TestSelectionRejectsUnknownContextCookie(t *testing.T) {
 }
 
 func TestSelectionUsesPinnedWhenNoCookie(t *testing.T) {
-	reg := NewRegistry(newTestConfig())
+	reg := NewRegistry(newTestConfig(), nil)
 	pinned := func(ctx string) []string {
 		if ctx == "ctx-a" {
 			return []string{"alpha", "beta"}
