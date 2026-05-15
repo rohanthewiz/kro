@@ -1198,6 +1198,50 @@ body.term-resizing * { cursor: ns-resize !important; }
     border-color: #54a0ff;
     box-shadow: 0 0 0 2px rgba(84,160,255,0.15);
 }
+/* Subtle hint: text in a block's output is selected and ready to insert.
+   Drawn after :focus-within so a non-focused editor still picks up the cue;
+   when the editor is focused too, the blue ring wins by source order. */
+.term-editor.has-output-selection .term-highlight {
+    border-color: #6ada8e;
+    box-shadow: 0 0 0 2px rgba(106,218,142,0.18);
+}
+
+/* Right-click menu shown on selection inside .term-block-out. */
+.term-ctx-menu {
+    position: fixed;
+    z-index: 9999;
+    min-width: 200px;
+    background: #1a1f2e;
+    border: 1px solid #2d3650;
+    border-radius: 6px;
+    box-shadow: 0 8px 22px rgba(0,0,0,0.5);
+    padding: 4px 0;
+    display: none;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 0.82rem;
+    user-select: none;
+}
+.term-ctx-menu.open { display: block; }
+.term-ctx-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    color: #e0e6ed;
+    padding: 7px 14px;
+    cursor: pointer;
+    font: inherit;
+}
+.term-ctx-menu button:hover { background: rgba(84,160,255,0.18); color: #fff; }
+.term-ctx-menu button code {
+    color: #fdcb6e;
+    background: rgba(0,0,0,0.28);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
+    font-size: 0.78em;
+}
 
 .term-run {
     flex: 0 0 auto;

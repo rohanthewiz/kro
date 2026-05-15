@@ -1859,6 +1859,108 @@
         });
     }
 
+    // ----- Right-click menu on selected output text -----
+    // When the user selects text inside any .term-block-out and right-clicks,
+    // we suppress the browser menu and show a tiny menu of actions targeting
+    // the input editor. selectionchange also lights up a soft border around
+    // the editor so the user can see that a selection is "ready to use".
+    var termCtxMenu = null;
+    var termSelectionText = '';
+
+    function ensureTermCtxMenu() {
+        if (termCtxMenu) return termCtxMenu;
+        var m = document.createElement('div');
+        m.className = 'term-ctx-menu';
+        m.innerHTML =
+            '<button type="button" data-act="insert">Insert into command</button>' +
+            '<button type="button" data-act="copy">Copy</button>' +
+            '<button type="button" data-act="copy-label">Copy as <code>-l label=…</code></button>';
+        m.addEventListener('click', onTermCtxMenuClick);
+        // Stop mousedown inside menu from collapsing the selection before the click fires.
+        m.addEventListener('mousedown', function(e) { e.preventDefault(); });
+        document.body.appendChild(m);
+        termCtxMenu = m;
+        return m;
+    }
+
+    function showTermCtxMenu(x, y) {
+        var m = ensureTermCtxMenu();
+        m.style.left = x + 'px';
+        m.style.top = y + 'px';
+        m.classList.add('open');
+        // Reposition if it overflows the viewport.
+        var r = m.getBoundingClientRect();
+        var nx = x, ny = y;
+        if (r.right > window.innerWidth - 4) nx = Math.max(4, window.innerWidth - r.width - 4);
+        if (r.bottom > window.innerHeight - 4) ny = Math.max(4, window.innerHeight - r.height - 4);
+        if (nx !== x) m.style.left = nx + 'px';
+        if (ny !== y) m.style.top = ny + 'px';
+    }
+
+    function hideTermCtxMenu() {
+        if (termCtxMenu) termCtxMenu.classList.remove('open');
+    }
+
+    function insertIntoTermInput(text) {
+        if (!termInput || !text) return;
+        termInput.focus();
+        var v = termInput.value;
+        var s = termInput.selectionStart;
+        var e = termInput.selectionEnd;
+        var prefix = (s > 0 && !/\s$/.test(v.slice(0, s))) ? ' ' : '';
+        var ins = prefix + text;
+        termInput.value = v.slice(0, s) + ins + v.slice(e);
+        var caret = s + ins.length;
+        termInput.selectionStart = termInput.selectionEnd = caret;
+        refreshTermHighlight();
+        autosizeTermInput();
+    }
+
+    function onTermCtxMenuClick(e) {
+        var btn = e.target.closest && e.target.closest('button');
+        if (!btn) return;
+        var sel = termSelectionText;
+        var act = btn.getAttribute('data-act');
+        if (act === 'insert') {
+            insertIntoTermInput(sel);
+        } else if (act === 'copy') {
+            if (sel) navigator.clipboard.writeText(sel).catch(function(){});
+        } else if (act === 'copy-label') {
+            if (sel) navigator.clipboard.writeText('-l label=' + sel).catch(function(){});
+        }
+        hideTermCtxMenu();
+    }
+
+    function selectionInsideBlockOut(sel) {
+        if (!sel || sel.isCollapsed) return false;
+        var n = sel.anchorNode;
+        if (!n) return false;
+        var el = n.nodeType === 1 ? n : n.parentElement;
+        return !!(el && el.closest && el.closest('.term-block-out'));
+    }
+
+    function onTermBlockContextMenu(e) {
+        var sel = window.getSelection();
+        if (!selectionInsideBlockOut(sel)) return; // fall through to native menu
+        var text = sel.toString();
+        if (!text) return;
+        termSelectionText = text;
+        e.preventDefault();
+        showTermCtxMenu(e.clientX, e.clientY);
+    }
+
+    function onTermSelectionChange() {
+        var sel = window.getSelection();
+        var has = selectionInsideBlockOut(sel) && !!sel.toString();
+        var editor = document.querySelector('.term-editor');
+        if (editor) editor.classList.toggle('has-output-selection', has);
+    }
+
+    function onDocClickForCtxMenu(e) {
+        if (!termCtxMenu || !termCtxMenu.classList.contains('open')) return;
+        if (!termCtxMenu.contains(e.target)) hideTermCtxMenu();
+    }
+
     function initTerminal() {
         termInput = document.getElementById('term-input');
         termHighlight = document.getElementById('term-highlight');
@@ -1884,6 +1986,14 @@
 
         initTermResizer();
         termBlocks.addEventListener('click', onTermBlockClick);
+        termBlocks.addEventListener('contextmenu', onTermBlockContextMenu);
+
+        document.addEventListener('selectionchange', onTermSelectionChange);
+        document.addEventListener('mousedown', onDocClickForCtxMenu);
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') hideTermCtxMenu();
+        });
+        window.addEventListener('scroll', hideTermCtxMenu, true);
 
         refreshTermHighlight();
         autosizeTermInput();
