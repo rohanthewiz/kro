@@ -118,12 +118,9 @@ func describePod(buf *bytes.Buffer, pod *coreV1.Pod) {
 		fmt.Fprintf(buf, "    Image:      %s\n", c.Image)
 		for _, cs := range pod.Status.ContainerStatuses {
 			if cs.Name == c.Name {
-				if cs.State.Running != nil {
-					fmt.Fprintf(buf, "    State:      Running (since %s)\n", cs.State.Running.StartedAt.Format("2006-01-02 15:04:05"))
-				} else if cs.State.Waiting != nil {
-					fmt.Fprintf(buf, "    State:      Waiting (%s)\n", cs.State.Waiting.Reason)
-				} else if cs.State.Terminated != nil {
-					fmt.Fprintf(buf, "    State:      Terminated (%s, exit %d)\n", cs.State.Terminated.Reason, cs.State.Terminated.ExitCode)
+				writeContainerState(buf, "State", cs.State)
+				if cs.LastTerminationState.Running != nil || cs.LastTerminationState.Waiting != nil || cs.LastTerminationState.Terminated != nil {
+					writeContainerState(buf, "Last State", cs.LastTerminationState)
 				}
 				fmt.Fprintf(buf, "    Ready:      %v\n", cs.Ready)
 				fmt.Fprintf(buf, "    Restarts:   %d\n", cs.RestartCount)
@@ -397,6 +394,45 @@ func writeLabels(buf *bytes.Buffer, labels map[string]string) {
 	sort.Strings(keys)
 	for _, k := range keys {
 		fmt.Fprintf(buf, "  %s=%s\n", k, labels[k])
+	}
+}
+
+func writeContainerState(buf *bytes.Buffer, label string, st coreV1.ContainerState) {
+	const tsFmt = "Mon, 02 Jan 2006 15:04:05 -0700"
+	switch {
+	case st.Running != nil:
+		fmt.Fprintf(buf, "    %s:      Running\n", label)
+		if !st.Running.StartedAt.IsZero() {
+			fmt.Fprintf(buf, "      Started:    %s\n", st.Running.StartedAt.Format(tsFmt))
+		}
+	case st.Waiting != nil:
+		fmt.Fprintf(buf, "    %s:      Waiting\n", label)
+		if st.Waiting.Reason != "" {
+			fmt.Fprintf(buf, "      Reason:     %s\n", st.Waiting.Reason)
+		}
+		if st.Waiting.Message != "" {
+			fmt.Fprintf(buf, "      Message:    %s\n", st.Waiting.Message)
+		}
+	case st.Terminated != nil:
+		fmt.Fprintf(buf, "    %s:      Terminated\n", label)
+		if st.Terminated.Reason != "" {
+			fmt.Fprintf(buf, "      Reason:     %s\n", st.Terminated.Reason)
+		}
+		if st.Terminated.Message != "" {
+			fmt.Fprintf(buf, "      Message:    %s\n", st.Terminated.Message)
+		}
+		fmt.Fprintf(buf, "      Exit Code:  %d\n", st.Terminated.ExitCode)
+		if st.Terminated.Signal != 0 {
+			fmt.Fprintf(buf, "      Signal:     %d\n", st.Terminated.Signal)
+		}
+		if !st.Terminated.StartedAt.IsZero() {
+			fmt.Fprintf(buf, "      Started:    %s\n", st.Terminated.StartedAt.Format(tsFmt))
+		}
+		if !st.Terminated.FinishedAt.IsZero() {
+			fmt.Fprintf(buf, "      Finished:   %s\n", st.Terminated.FinishedAt.Format(tsFmt))
+		}
+	default:
+		fmt.Fprintf(buf, "    %s:      <unknown>\n", label)
 	}
 }
 
