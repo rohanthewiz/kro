@@ -1372,6 +1372,22 @@
             '<button type="button" class="term-blk-btn" data-act="copy" title="Copy output">⧉</button>' +
         '</span>';
 
+    // The browser's native `resize: vertical` handle writes an inline `height`
+    // style on .term-block-out when the user drags it. Watch for that and tag
+    // the parent block so the last-child auto-fill CSS stops growing it back —
+    // manual resize wins. Font/size changes touch other style properties, not
+    // height, so they don't trip this.
+    function watchTermBlockManualResize(blockEl, outEl) {
+        if (typeof MutationObserver === 'undefined') return;
+        var obs = new MutationObserver(function() {
+            if (outEl.style.height) {
+                blockEl.classList.add('user-resized');
+                obs.disconnect();
+            }
+        });
+        obs.observe(outEl, { attributes: true, attributeFilter: ['style'] });
+    }
+
     function termAppendBlock(cmd) {
         if (!termBlocks) return null;
         var empty = termBlocks.querySelector('.term-empty');
@@ -1393,6 +1409,8 @@
         var out = document.createElement('pre');
         out.className = 'term-block-out';
         block.appendChild(out);
+
+        watchTermBlockManualResize(block, out);
 
         termBlocks.appendChild(block);
         termBlocks.scrollTop = termBlocks.scrollHeight;

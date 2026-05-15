@@ -929,6 +929,8 @@ body.dark .log-msg-err {
     font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
     font-size: 0.78rem;
     line-height: 1.45;
+    display: flex;
+    flex-direction: column;
 }
 
 /* Drag handle that sits below the input row. Dragging up/down resizes the
@@ -967,8 +969,22 @@ body.term-resizing * { cursor: ns-resize !important; }
 .term-block {
     padding: 4px 0 6px;
     border-bottom: 1px solid rgba(255,255,255,0.05);
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 auto;
+    min-height: 0;
 }
 .term-block:last-child { border-bottom: none; }
+/* Newest block grows to consume any extra vertical space the user gave the
+   pane via the splitter, so the visible output fills the available area
+   instead of leaving empty terminal background below. Disabled once the user
+   manually resizes the block via its resize handle (.user-resized). */
+.term-block:last-child:not(.user-resized) { flex: 1 1 auto; }
+.term-block:last-child:not(.user-resized) > .term-block-out {
+    flex: 1 1 auto;
+    max-height: none;
+    min-height: 0;
+}
 
 .term-block-cmd {
     display: flex;
