@@ -1011,7 +1011,7 @@ body.dark .log-msg-err {
 .term-editor .term-input {
     margin: 0;
     padding: 4px 8px;
-    border: 1px solid #2d3650;
+    border: 1px solid transparent;
     border-radius: 6px;
     font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
     font-size: 0.85rem;
@@ -1019,22 +1019,28 @@ body.dark .log-msg-err {
     white-space: pre-wrap;
     word-break: break-word;
     box-sizing: border-box;
-    background: #0f1320;
     overflow: hidden;
 }
+/* Highlight pre is the back layer — it owns the visible background, border,
+   and focus ring. The textarea on top is fully transparent so the colorized
+   spans show through; the textarea's only visible artifact is the caret. */
 .term-editor .term-highlight {
     position: absolute;
     inset: 0;
+    background: #0f1320;
+    border-color: #2d3650;
     color: #e0e6ed;
     pointer-events: none;
     overflow: hidden;
     min-height: 100%;
+    transition: border-color 0.12s, box-shadow 0.12s;
 }
 .term-editor .term-input {
     position: relative;
     width: 100%;
     min-height: 2em;
     max-height: 220px;
+    background: transparent;
     color: transparent;
     caret-color: #e0e6ed;
     resize: none;
@@ -1045,13 +1051,9 @@ body.dark .log-msg-err {
     color: #6c7a93;
     -webkit-text-fill-color: #6c7a93;
 }
-.term-editor .term-input:focus {
+.term-editor:focus-within .term-highlight {
     border-color: #54a0ff;
     box-shadow: 0 0 0 2px rgba(84,160,255,0.15);
-}
-.term-editor .term-input:focus + .term-highlight,
-.term-editor .term-highlight {
-    /* overlay always present; keep border in sync via input's border */
 }
 
 .term-run {
