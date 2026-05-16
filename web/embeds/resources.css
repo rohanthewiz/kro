@@ -1175,8 +1175,25 @@ body.term-resizing * { cursor: ns-resize !important; }
 }
 .term-block-cmd .term-exit.ok      { background: #00b894; }
 .term-block-cmd .term-exit.bad     { background: #c0392b; }
-.term-block-cmd .term-exit.running { background: #0a96a6; }
+.term-block-cmd .term-exit.running { background: #0a96a6; padding-right: 3px; }
 .term-block-cmd .term-exit.canceled{ background: #b6701a; }
+.term-block-cmd .term-exit-abort {
+    margin-left: 6px;
+    padding: 0 5px;
+    background: transparent;
+    border: none;
+    color: rgba(255,255,255,0.9);
+    font-size: 0.95rem;
+    line-height: 1;
+    font-weight: 700;
+    cursor: pointer;
+    border-radius: 50%;
+    transition: background 0.12s, color 0.12s;
+}
+.term-block-cmd .term-exit-abort:hover {
+    background: rgba(0,0,0,0.35);
+    color: #fff;
+}
 
 /* Each block's output is its own scroll area so the command row stays put as
    the user scrolls long output. The user can drag the bottom-right corner

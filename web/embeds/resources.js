@@ -1603,7 +1603,7 @@
             '<span class="term-fold" title="Fold/unfold output">▾</span>' +
             '<span class="term-prompt-mini">$ kubectl</span>' +
             '<span class="term-cmd-text" title="' + escapeHtml(cmd) + '">' + highlightTermLine(cmd, true) + '</span>' +
-            '<span class="term-exit running">running…</span>' +
+            '<span class="term-exit running">running…<button type="button" class="term-exit-abort" title="Abort this command" aria-label="Abort">×</button></span>' +
             TERM_BLK_TOOLBAR_HTML;
         block.appendChild(cmdRow);
 
@@ -1638,6 +1638,13 @@
         if (fold) {
             var fblock = fold.closest('.term-block');
             if (fblock) fblock.classList.toggle('folded');
+            return;
+        }
+
+        var abort = t.closest('.term-exit-abort');
+        if (abort) {
+            e.stopPropagation();
+            window.termCancel();
             return;
         }
 
