@@ -239,23 +239,10 @@
         // Jobs
         html += sectionHierarchical('jobs', 'Jobs', tree.jobs || [], 'job');
 
-        // Deployments + ReplicaSets + Pods
-        html += sectionDeployments(tree.deployments || []);
-
-        // StatefulSets / DaemonSets
-        html += sectionHierarchical('statefulsets', 'StatefulSets', tree.statefulsets || [], 'sts');
-        html += sectionHierarchical('daemonsets', 'DaemonSets', tree.daemonsets || [], 'ds');
-
-        // Other pods
+        // Other pods (computed up-front so All Pods can include them)
         var orphans = tree.orphan_pods || [];
-        if (orphans.length > 0) {
-            var orphanBody = '<div class="table-wrapper"><table>' + tableHead() + '<tbody>';
-            orphans.forEach(function(pod) { orphanBody += parentRow('', pod, false); });
-            orphanBody += '</tbody></table></div>';
-            html += sectionShell('pods-orphan', 'Pods (orphan)', orphans.length, orphanBody);
-        }
 
-        // Flat all pods
+        // Flat all pods — placed just below Jobs for quick scanning
         var allPods = [];
         (tree.jobs || []).forEach(function(job) { (job.children || []).forEach(function(p) { allPods.push(p); }); });
         (tree.deployments || []).forEach(function(d) { (d.children || []).forEach(function(rs) { (rs.children || []).forEach(function(p) { allPods.push(p); }); }); });
@@ -273,6 +260,20 @@
             allPodsBody = '<div class="table-wrapper"><div class="empty-state">No pods found</div></div>';
         }
         html += sectionShell('all-pods', 'All Pods', allPods.length, allPodsBody);
+
+        // Deployments + ReplicaSets + Pods
+        html += sectionDeployments(tree.deployments || []);
+
+        // StatefulSets / DaemonSets
+        html += sectionHierarchical('statefulsets', 'StatefulSets', tree.statefulsets || [], 'sts');
+        html += sectionHierarchical('daemonsets', 'DaemonSets', tree.daemonsets || [], 'ds');
+
+        if (orphans.length > 0) {
+            var orphanBody = '<div class="table-wrapper"><table>' + tableHead() + '<tbody>';
+            orphans.forEach(function(pod) { orphanBody += parentRow('', pod, false); });
+            orphanBody += '</tbody></table></div>';
+            html += sectionShell('pods-orphan', 'Pods (orphan)', orphans.length, orphanBody);
+        }
 
         // Read-only sections (no children)
         html += flatSection('services', 'Services', tree.services || []);
