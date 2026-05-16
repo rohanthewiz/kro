@@ -404,6 +404,8 @@
         if (kind === 'Pod') {
             btns += '<button class="btn-logs" onclick="event.stopPropagation(); viewLogs(\'' +
                 escapeAttr(name) + '\')">Logs</button>';
+            btns += '<button class="btn-metrics" onclick="event.stopPropagation(); viewMetrics(\'' +
+                escapeAttr(name) + '\')">Metrics</button>';
         }
         if (kind === 'Job' || kind === 'Pod' || kind === 'Deployment' || kind === 'ReplicaSet') {
             btns += '<button class="btn-delete" onclick="event.stopPropagation(); deleteResource(\'' +
@@ -667,6 +669,203 @@
             logSource.close();
             logSource = null;
         }
+    }
+
+    // ===== Pod Metrics (CPU + memory live chart) =====
+    // Polls /sse/metrics every 10s (server-side cadence). Underlying
+    // metrics-server typically scrapes at ~15s, so values will step.
+    var metricsSource = null;
+    var metricsState = {
+        pod: '',
+        samples: [],          // ring buffer of {ts, cpu_m, mem_bytes, containers:[{name,cpu_m,mem_bytes}]}
+        maxSamples: 60,       // ~10 minutes at 10s
+        containerColors: {},  // name -> hex
+        nextColorIdx: 0
+    };
+    var METRIC_PALETTE = [
+        '#4ea1ff', '#ff8a4e', '#7ad27a', '#d97aff',
+        '#ffd24e', '#4ed2c2', '#ff6e8a', '#9aa9ff'
+    ];
+
+    window.viewMetrics = function(name) {
+        closeMetricsStream();
+        metricsState.pod = name;
+        metricsState.samples = [];
+        metricsState.containerColors = {};
+        metricsState.nextColorIdx = 0;
+        openModal('Metrics: ' + name, '', { stream: true });
+        var el = document.getElementById('modal-content');
+        if (el) el.innerHTML = renderMetricsShell();
+        startMetricsStream(name);
+    };
+
+    function renderMetricsShell() {
+        return '<div class="metrics-panel">' +
+            '<div class="metrics-hint">Live usage from metrics-server. Metrics-server typically scrapes every ~15s, so values may step.</div>' +
+            '<section class="metrics-chart">' +
+                '<header><h3>Memory</h3><span id="metrics-mem-current" class="metrics-current">—</span></header>' +
+                '<svg id="metrics-mem-svg" class="metrics-svg" preserveAspectRatio="none" viewBox="0 0 600 120"></svg>' +
+                '<div id="metrics-mem-axis" class="metrics-axis"></div>' +
+            '</section>' +
+            '<section class="metrics-chart">' +
+                '<header><h3>CPU</h3><span id="metrics-cpu-current" class="metrics-current">—</span></header>' +
+                '<svg id="metrics-cpu-svg" class="metrics-svg" preserveAspectRatio="none" viewBox="0 0 600 120"></svg>' +
+                '<div id="metrics-cpu-axis" class="metrics-axis"></div>' +
+            '</section>' +
+            '<div id="metrics-legend" class="metrics-legend"></div>' +
+            '<div id="metrics-status" class="metrics-status"></div>' +
+        '</div>';
+    }
+
+    function startMetricsStream(name) {
+        closeMetricsStream();
+        setStreamStatus('reconnecting', 'Connecting…');
+        metricsSource = new EventSource('/sse/metrics?name=' + encodeURIComponent(name));
+        metricsSource.onopen = function() { setStreamStatus('connected', 'Connected'); };
+        metricsSource.addEventListener('metrics', function(e) {
+            setStreamStatus('connected', 'Connected');
+            try {
+                var sample = JSON.parse(e.data);
+                pushMetricsSample(sample);
+                renderMetrics();
+            } catch (err) { /* ignore parse errors */ }
+        });
+        metricsSource.addEventListener('error', function(e) {
+            // Server-sent error event (not the EventSource onerror)
+            var msg = '';
+            try { msg = (JSON.parse(e.data || '{}').error) || ''; } catch (_) {}
+            var statusEl = document.getElementById('metrics-status');
+            if (statusEl && msg) statusEl.textContent = msg;
+        });
+        metricsSource.onerror = function() {
+            setStreamStatus('reconnecting', 'Reconnecting…');
+        };
+    }
+
+    function closeMetricsStream() {
+        if (metricsSource) {
+            metricsSource.close();
+            metricsSource = null;
+        }
+    }
+
+    function pushMetricsSample(sample) {
+        // Make sure each container has a stable color across samples
+        (sample.containers || []).forEach(function(c) {
+            if (!metricsState.containerColors[c.name]) {
+                metricsState.containerColors[c.name] =
+                    METRIC_PALETTE[metricsState.nextColorIdx % METRIC_PALETTE.length];
+                metricsState.nextColorIdx++;
+            }
+        });
+        metricsState.samples.push(sample);
+        if (metricsState.samples.length > metricsState.maxSamples) {
+            metricsState.samples.shift();
+        }
+    }
+
+    function renderMetrics() {
+        var samples = metricsState.samples;
+        if (!samples.length) return;
+        var last = samples[samples.length - 1];
+
+        // Headlines
+        var memCur = document.getElementById('metrics-mem-current');
+        if (memCur) memCur.textContent = formatBytes(last.mem_bytes);
+        var cpuCur = document.getElementById('metrics-cpu-current');
+        if (cpuCur) cpuCur.textContent = last.cpu_m + ' mCPU';
+
+        // Build per-container series (sparse — only containers we've seen)
+        var seriesNames = Object.keys(metricsState.containerColors);
+        seriesNames.sort();
+
+        // Memory chart
+        drawChart('metrics-mem-svg', samples, seriesNames, function(s) { return s.mem_bytes; },
+            function(c) { return c.mem_bytes; });
+        var memAxis = document.getElementById('metrics-mem-axis');
+        if (memAxis) memAxis.textContent = '0 — ' + formatBytes(maxOf(samples, 'mem_bytes'));
+
+        // CPU chart
+        drawChart('metrics-cpu-svg', samples, seriesNames, function(s) { return s.cpu_m; },
+            function(c) { return c.cpu_m; });
+        var cpuAxis = document.getElementById('metrics-cpu-axis');
+        if (cpuAxis) cpuAxis.textContent = '0 — ' + maxOf(samples, 'cpu_m') + ' mCPU';
+
+        // Legend
+        var legend = document.getElementById('metrics-legend');
+        if (legend) {
+            var parts = ['<span class="metrics-legend-item"><span class="metrics-swatch total"></span>total</span>'];
+            seriesNames.forEach(function(name) {
+                parts.push('<span class="metrics-legend-item"><span class="metrics-swatch" style="background:' +
+                    metricsState.containerColors[name] + '"></span>' + escapeHtml(name) + '</span>');
+            });
+            legend.innerHTML = parts.join('');
+        }
+    }
+
+    function maxOf(samples, key) {
+        var m = 0;
+        samples.forEach(function(s) { if (s[key] > m) m = s[key]; });
+        return m;
+    }
+
+    // drawChart paints a per-container line plus a thicker total line into the
+    // target SVG. Y-scales to the per-window max with 10% headroom; X is
+    // proportional to sample index (visually equal spacing).
+    function drawChart(svgId, samples, seriesNames, totalFn, containerFn) {
+        var svg = document.getElementById(svgId);
+        if (!svg) return;
+        var W = 600, H = 120, padY = 6;
+        var n = samples.length;
+        var maxVal = 0;
+        samples.forEach(function(s) {
+            if (totalFn(s) > maxVal) maxVal = totalFn(s);
+        });
+        if (maxVal <= 0) maxVal = 1;
+        maxVal = maxVal * 1.1;
+
+        var xAt = function(i) {
+            if (n <= 1) return W;
+            return Math.round((i / (n - 1)) * W);
+        };
+        var yAt = function(v) {
+            return Math.round(H - padY - (v / maxVal) * (H - 2 * padY));
+        };
+
+        var pieces = [];
+        // Per-container lines (drawn first, thinner)
+        seriesNames.forEach(function(cname) {
+            var color = metricsState.containerColors[cname];
+            var d = '';
+            samples.forEach(function(s, i) {
+                var c = (s.containers || []).find(function(x) { return x.name === cname; });
+                var v = c ? containerFn(c) : 0;
+                d += (i === 0 ? 'M' : 'L') + xAt(i) + ',' + yAt(v) + ' ';
+            });
+            pieces.push('<path d="' + d.trim() + '" fill="none" stroke="' + color + '" stroke-width="1.2" opacity="0.85"/>');
+        });
+        // Total line (thicker, on top)
+        var dt = '';
+        samples.forEach(function(s, i) {
+            dt += (i === 0 ? 'M' : 'L') + xAt(i) + ',' + yAt(totalFn(s)) + ' ';
+        });
+        pieces.push('<path d="' + dt.trim() + '" fill="none" stroke="#e6e6e6" stroke-width="2"/>');
+        // Last-point dot for the total
+        if (n > 0) {
+            var lx = xAt(n - 1), ly = yAt(totalFn(samples[n - 1]));
+            pieces.push('<circle cx="' + lx + '" cy="' + ly + '" r="2.5" fill="#e6e6e6"/>');
+        }
+        svg.innerHTML = pieces.join('');
+    }
+
+    // Mirror of formatBytes in the Go side — used for memory headlines.
+    function formatBytes(b) {
+        if (b == null) return '—';
+        var mi = 1024 * 1024, gi = 1024 * 1024 * 1024;
+        if (b >= gi) return (b / gi).toFixed(1) + ' GiB';
+        if (b >= mi) return Math.round(b / mi) + ' MiB';
+        if (b >= 1024) return Math.round(b / 1024) + ' KiB';
+        return b + ' B';
     }
 
     // ===== Log search =====
@@ -1127,6 +1326,7 @@
 
     window.closeModal = function() {
         closeLogStream();
+        closeMetricsStream();
         var overlay = document.getElementById('resource-modal-overlay');
         if (overlay) overlay.classList.remove('active');
     };

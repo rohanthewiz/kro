@@ -18,6 +18,8 @@ const termCmdMaxLen = 4096
 
 const snapshotInterval = 10 * time.Second
 
+const metricsPollInterval = 10 * time.Second
+
 // SSE streams resource-tree snapshots for the cookie-selected (context,
 // namespace) of the connecting client. Each connection has its own goroutine
 // and selection — multiple tabs can target different clusters/namespaces.
@@ -228,6 +230,79 @@ func produceTermStream(ctx context.Context, ctxName, ns string, args []string, h
 					return
 				}
 			}
+		}
+	}
+}
+
+// MetricsSSE polls metrics.k8s.io for a single pod every metricsPollInterval
+// and pushes each sample as a "metrics" event. Mirrors LogsSSE's per-request
+// SSEHub so disconnect cancels the polling goroutine.
+func (h *handlers) MetricsSSE(svr *rweb.Server) rweb.Handler {
+	return func(c rweb.Context) error {
+		name := c.Request().QueryParam("name")
+		if name == "" {
+			return writeTextErr(c, 400, "name is required")
+		}
+		sel, err := h.resolve(c)
+		if err != nil {
+			return writeTextErr(c, 503, err.Error())
+		}
+		client, err := h.reg.Client(sel.Context)
+		if err != nil {
+			return writeTextErr(c, 502, err.Error())
+		}
+
+		streamCtx, cancel := context.WithCancel(context.Background())
+
+		var hub *rweb.SSEHub
+		hub = rweb.NewSSEHub(rweb.SSEHubOptions{
+			ChannelSize:       16,
+			HeartbeatInterval: 30 * time.Second,
+			OnDisconnect: func() {
+				cancel()
+				if hub != nil {
+					hub.Close()
+				}
+			},
+		})
+
+		setupErr := hub.Handler(svr, "metrics")(c)
+		if setupErr != nil {
+			cancel()
+			hub.Close()
+			return setupErr
+		}
+
+		go produceMetricsStream(streamCtx, client, sel.Namespace, name, hub)
+		return nil
+	}
+}
+
+func produceMetricsStream(ctx context.Context, client *kubernetes.Clientset, ns, name string, hub *rweb.SSEHub) {
+	send := func() {
+		sample, err := kube.PodMetrics(ctx, client, ns, name)
+		if err != nil {
+			payload, _ := json.Marshal(map[string]string{"error": err.Error()})
+			hub.BroadcastRaw(rweb.SSEvent{Type: "error", Data: string(payload)})
+			return
+		}
+		payload, err := json.Marshal(sample)
+		if err != nil {
+			logger.LogErr(serr.Wrap(err, "marshal metrics sample"))
+			return
+		}
+		hub.BroadcastRaw(rweb.SSEvent{Type: "metrics", Data: string(payload)})
+	}
+
+	send()
+	t := time.NewTicker(metricsPollInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			send()
 		}
 	}
 }

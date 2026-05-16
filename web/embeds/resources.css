@@ -69,6 +69,115 @@ body {
 }
 .btn-logs:hover { background: #00a381; }
 
+.btn-metrics {
+    background: #0984e3;
+    color: #fff;
+    padding: 4px 10px;
+    border: none;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    margin-right: 4px;
+}
+.btn-metrics:hover { background: #0769b8; }
+
+/* Pod metrics modal */
+.metrics-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 4px;
+    color: #2d3436;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+}
+.metrics-hint {
+    font-size: 0.75rem;
+    color: #6c757d;
+}
+.metrics-chart {
+    background: #f4f5f7;
+    border: 1px solid #e1e4e8;
+    border-radius: 6px;
+    padding: 8px 10px;
+}
+.metrics-chart header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+.metrics-chart h3 {
+    margin: 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #2d3436;
+}
+.metrics-current {
+    font-variant-numeric: tabular-nums;
+    font-size: 0.9rem;
+    color: #2d3436;
+}
+.metrics-svg {
+    display: block;
+    width: 100%;
+    height: 120px;
+    background: #1a1a2e;
+    border-radius: 4px;
+}
+.metrics-axis {
+    margin-top: 4px;
+    font-size: 0.7rem;
+    color: #6c757d;
+    font-variant-numeric: tabular-nums;
+}
+.metrics-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+    font-size: 0.75rem;
+    color: #2d3436;
+}
+.metrics-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.metrics-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+}
+.metrics-swatch.total {
+    background: #e6e6e6;
+    border: 1px solid #2d3436;
+}
+.metrics-status {
+    font-size: 0.75rem;
+    color: #d63031;
+    min-height: 1em;
+}
+
+body.dark .metrics-panel,
+body.dark .metrics-chart h3,
+body.dark .metrics-current,
+body.dark .metrics-legend {
+    color: #e0e0e0;
+}
+body.dark .metrics-chart {
+    background: rgba(255,255,255,0.04);
+    border-color: rgba(255,255,255,0.08);
+}
+body.dark .metrics-hint,
+body.dark .metrics-axis {
+    color: #9aa0a6;
+}
+body.dark .metrics-swatch.total {
+    border-color: #e0e0e0;
+}
+
 /* Kubeconfig panel */
 .kubeconfig-panel {
     margin-bottom: 20px;
