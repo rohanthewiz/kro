@@ -11,7 +11,7 @@ type Config struct {
 func Load() Config {
 	port := os.Getenv("KRO_PORT")
 	if port == "" {
-		port = "8000"
+		port = "8222"
 	}
 	return Config{
 		Port:           port,
