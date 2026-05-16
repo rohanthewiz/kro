@@ -1857,6 +1857,12 @@
             ex.classList.add('bad');
             ex.textContent = 'exit ' + exitCode;
         }
+        if (!canceled && termBlocks && block.el) {
+            var siblings = termBlocks.querySelectorAll('.term-block');
+            for (var i = 0; i < siblings.length; i++) {
+                if (siblings[i] !== block.el) siblings[i].classList.add('folded');
+            }
+        }
     }
 
     function termClose() {
