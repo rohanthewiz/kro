@@ -122,16 +122,25 @@
 .selector {
     background: #fff;
     color: #2d3436;
-    border: 1px solid #dfe6e9;
+    border: 1px solid #141434;
     border-radius: 7px;
-    padding: 6px 12px;
+    padding: 6px 30px 6px 12px;
     font-size: 0.98rem;
     font-weight: 500;
     cursor: pointer;
     min-width: 168px;
     max-width: 336px;
     transition: border-color 0.15s, box-shadow 0.15s;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'><path fill='none' stroke='%232d3436' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5l5 5 5-5'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 11px 7px;
 }
+/* Hide the native arrow on the text-input variant (ns-add-input is also .selector). */
+.selector.ns-add-input { background-image: none; padding-right: 12px; }
 .selector:focus {
     outline: none;
     border-color: #0984e3;
@@ -224,9 +233,10 @@ body.dark .selector-group {
 body.dark .selector-group.cluster-group { border-bottom-color: #54a0ff; }
 body.dark .selector-group.ns-group { border-bottom-color: #55efc4; }
 body.dark .selector {
-    background: #16213e;
+    background-color: #16213e;
     color: #e0e0e0;
-    border-color: #2d2d44;
+    border-color: #141434;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'><path fill='none' stroke='%23b2bec3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5l5 5 5-5'/></svg>");
 }
 body.dark .selector:focus {
     border-color: #54a0ff;
