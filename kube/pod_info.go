@@ -31,17 +31,17 @@ func containerStatus(podStatus coreV1.PodStatus) string {
 	return string(podStatus.Phase)
 }
 
-// podSpecResources sums container resource requests from the pod spec.
+// podSpecResources sums container resource limits from the pod spec.
 // Returns formatted CPU (millicores) and memory strings, with an asterisk
-// to indicate "requested" rather than "live usage".
+// to indicate "from spec" rather than "live usage".
 func podSpecResources(spec coreV1.PodSpec) (cpu, memory string) {
 	var cpuTotal, memTotal int64
 	for _, c := range spec.Containers {
-		if req, ok := c.Resources.Requests[coreV1.ResourceCPU]; ok {
-			cpuTotal += req.MilliValue()
+		if lim, ok := c.Resources.Limits[coreV1.ResourceCPU]; ok {
+			cpuTotal += lim.MilliValue()
 		}
-		if req, ok := c.Resources.Requests[coreV1.ResourceMemory]; ok {
-			memTotal += req.Value()
+		if lim, ok := c.Resources.Limits[coreV1.ResourceMemory]; ok {
+			memTotal += lim.Value()
 		}
 	}
 	if cpuTotal > 0 {

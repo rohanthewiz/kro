@@ -388,7 +388,10 @@
     function tableHead() {
         return '<thead><tr>' +
             '<th></th><th>Name</th><th>Kind</th><th>Status</th><th>Ready / Completions</th>' +
-            '<th>Age</th><th>CPU</th><th>Memory</th><th>Node</th><th>Restarts</th><th>Actions</th>' +
+            '<th>Age</th>' +
+            '<th title="Sum of container CPU limits from the pod spec (* = from spec, not live usage)">CPU</th>' +
+            '<th title="Sum of container memory limits from the pod spec (* = from spec, not live usage)">Memory</th>' +
+            '<th>Node</th><th>Restarts</th><th>Actions</th>' +
             '</tr></thead>';
     }
 
