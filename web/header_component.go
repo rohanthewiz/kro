@@ -39,7 +39,7 @@ func (h HeaderBar) Render(b *element.Builder) any {
 					b.Select("id", "ns-select", "class", "selector").R(),
 					b.Input("type", "text", "id", "ns-add-input", "class", "selector ns-add-input", "placeholder", "namespace name", "autocomplete", "off").R(),
 					b.Button("type", "button", "id", "btn-ns-add", "class", "btn-ns btn-ns-add", "title", "Add namespace").T("+"),
-					b.Button("type", "button", "id", "btn-ns-remove", "class", "btn-ns btn-ns-remove", "title", "Remove selected namespace").T("×"),
+					b.Button("type", "button", "id", "btn-ns-remove", "class", "btn-ns btn-ns-remove", "title", "Remove selected namespace").T("−"),
 				),
 			),
 		),
