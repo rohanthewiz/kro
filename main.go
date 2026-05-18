@@ -42,7 +42,7 @@ func main() {
 	logger.InfoF("state file: %s", store.Path())
 
 	reg := kube.NewRegistry(raw, paths)
-	srv := web.NewServer(cfg, reg, store)
+	srv := web.NewServer(cfg, reg, store, BuildNumber)
 
 	logger.InfoF("kro listening on :%s (build=%s)", cfg.Port, BuildNumber)
 	if err := srv.Run(); err != nil {

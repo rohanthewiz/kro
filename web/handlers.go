@@ -17,8 +17,9 @@ import (
 )
 
 type handlers struct {
-	reg   *kube.ClientRegistry
-	store *state.Store
+	reg         *kube.ClientRegistry
+	store       *state.Store
+	buildNumber string
 }
 
 // resolve picks (context, namespace) using the store as the pinned-list source.

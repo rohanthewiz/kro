@@ -22,7 +22,8 @@
     color: #2d3436;
 }
 .version-label {
-    font-size: 0.7rem;
+    font-size: 0.62rem;
+    font-style: italic;
     font-weight: normal;
     color: #888;
     margin-left: 8px;

@@ -17,10 +17,10 @@ var resourcesJS string
 // /api/resources and a live /sse/resources stream, both keyed off cookies set
 // by /api/select.
 func (h *handlers) Page(c rweb.Context) error {
-	return c.WriteHTML(renderPage())
+	return c.WriteHTML(renderPage(h.buildNumber))
 }
 
-func renderPage() string {
+func renderPage(buildNumber string) string {
 	const pageName = "KRo — k8s resources"
 
 	b := element.B()
@@ -35,7 +35,7 @@ func renderPage() string {
 		),
 		b.Body().R(
 			b.DivClass("container").R(
-				HeaderBar{Title: "KRo"}.Render(b),
+				HeaderBar{Title: "KRo", Version: buildNumber}.Render(b),
 
 				b.DivClass("summary-bar").R(
 					summaryCard(b, "jobs", "Jobs", "summary-jobs"),
