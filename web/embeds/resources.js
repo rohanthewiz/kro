@@ -1420,6 +1420,19 @@
     var termHighlight = null;
     var termBlocks = null;
 
+    // Per-(context, namespace) terminal state. Blocks are stored as live DOM
+    // nodes (detached when off-screen), so search controllers and styles ride
+    // along with them. We cancel any running command before switching keys, so
+    // detached blocks never receive further output.
+    var termStateByKey = {};
+    var termCurrentKey = null;
+
+    // Cap on output spans (one per stdout/stderr line) kept per namespace
+    // terminal. Each append trims the oldest spans down to this limit; empty
+    // non-active blocks are then dropped so the scrollback doesn't fill up
+    // with bare command/exit headers.
+    var TERM_MAX_OUTPUT_LINES = 5000;
+
     function loadTermHistory() {
         try {
             var raw = localStorage.getItem(TERM_HISTORY_KEY);
@@ -1555,8 +1568,73 @@
 
     function updateTermTarget() {
         var el = document.getElementById('term-target');
-        if (!el) return;
-        el.textContent = (currentCtx || '?') + ' / ' + (currentNs || '?');
+        if (el) el.textContent = (currentCtx || '?') + ' / ' + (currentNs || '?');
+        termSwitchTo(termKey());
+    }
+
+    function termKey() {
+        return (currentCtx || '') + '::' + (currentNs || '');
+    }
+
+    // Swap the visible blocks to match the (ctx, ns) selection. Current blocks
+    // are detached (not destroyed) and parked under the previous key so they
+    // come back exactly as they were when the user returns. Any running
+    // command is canceled before swapping — the active block keeps its place
+    // in its origin namespace with a "canceled" pill.
+    function termSwitchTo(newKey) {
+        if (!termBlocks) { termCurrentKey = newKey; return; }
+        if (termCurrentKey === newKey) return;
+
+        if (termRunning) window.termCancel();
+
+        if (termCurrentKey !== null) {
+            var saved = [];
+            var n = termBlocks.firstChild;
+            while (n) {
+                var next = n.nextSibling;
+                if (n.nodeType === 1 && !(n.classList && n.classList.contains('term-empty'))) {
+                    saved.push(n);
+                }
+                termBlocks.removeChild(n);
+                n = next;
+            }
+            termStateByKey[termCurrentKey] = { blocks: saved };
+        }
+
+        termBlocks.innerHTML = '';
+        var st = termStateByKey[newKey];
+        if (st && st.blocks.length) {
+            for (var i = 0; i < st.blocks.length; i++) {
+                termBlocks.appendChild(st.blocks[i]);
+            }
+            termBlocks.scrollTop = termBlocks.scrollHeight;
+        } else {
+            termBlocks.innerHTML = '<div class="term-empty">kubectl output appears here. Try: get pods</div>';
+        }
+
+        termCurrentKey = newKey;
+    }
+
+    // Enforce the per-namespace output cap. Spans are kept in DOM order, so
+    // dropping from the front always removes the oldest output. After trimming
+    // we sweep blocks that have lost all their output (except the active one
+    // and the last block, which is the most recent context the user sees).
+    function termTrimToLimit() {
+        if (!termBlocks) return;
+        var spans = termBlocks.querySelectorAll('.term-block-out > span');
+        var over = spans.length - TERM_MAX_OUTPUT_LINES;
+        for (var i = 0; i < over; i++) spans[i].remove();
+        if (over <= 0) return;
+
+        var blocks = termBlocks.querySelectorAll('.term-block');
+        var lastIdx = blocks.length - 1;
+        for (var b = 0; b < blocks.length; b++) {
+            if (b === lastIdx) continue;
+            var blk = blocks[b];
+            if (termActiveBlock && blk === termActiveBlock.el) continue;
+            var out = blk.querySelector('.term-block-out');
+            if (out && out.childNodes.length === 0) blk.remove();
+        }
     }
 
     // Per-block toolbar: search toggle, font −/+, copy. Sits on the same line as
@@ -1839,6 +1917,7 @@
         out.appendChild(span);
         var ctl = blockSearchByEl.get(block.el);
         if (ctl) ctl.onAppend(span);
+        termTrimToLimit();
         if (atBottom) out.scrollTop = out.scrollHeight;
     }
 
