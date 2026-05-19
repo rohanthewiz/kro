@@ -157,7 +157,18 @@ func (h *handlers) Select(c rweb.Context) error {
 		}
 	}
 
+	// SetCookie writes Set-Cookie on the response; the request cookies that
+	// resolve reads from still hold the pre-change values. Override with the
+	// fields the client just persisted so the response reflects the state the
+	// next request will see — otherwise the client snaps back to the old
+	// selection (terminal label drifts off the dropdown).
 	sel, _ := h.resolve(c)
+	if body.Context != "" {
+		sel.Context = body.Context
+	}
+	if body.Namespace != "" {
+		sel.Namespace = body.Namespace
+	}
 	return c.WriteJSON(map[string]any{
 		"context":   sel.Context,
 		"namespace": sel.Namespace,
