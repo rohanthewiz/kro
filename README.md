@@ -95,3 +95,6 @@ go vet ./...
 go test ./...
 go run .
 ```
+
+### Example Build with commit hash baked in
+`go build -ldflags "-X main.BuildNumber=$(git rev-parse --short HEAD)" -o ~/bin/kro`
