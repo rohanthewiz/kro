@@ -585,16 +585,50 @@
         startLogStream(logSourcePod);
     };
 
+    // Buffered log lines waiting for the next rAF flush. Same rationale as the
+    // terminal panel: a noisy pod can deliver hundreds of SSE frames per
+    // animation frame, and doing the layout/scroll/highlight work per line
+    // pegs the main thread. Coalescing into one DOM update per frame keeps
+    // the modal responsive even when logs are pouring in.
+    var logLineBuf = [];
+    var logFlushScheduled = false;
+    var logContentEl = null;
+
     function appendLogLine(content, line) {
+        logContentEl = content;
+        logLineBuf.push(line);
+        if (logFlushScheduled) return;
+        logFlushScheduled = true;
+        requestAnimationFrame(flushLogLines);
+    }
+
+    function flushLogLines() {
+        logFlushScheduled = false;
+        var content = logContentEl;
+        if (!content || !logLineBuf.length) return;
+        var buf = logLineBuf;
+        logLineBuf = [];
+
         var body = content.parentNode; // .modal-body is the scroll container
         var atBottom = !body || (body.scrollHeight - body.scrollTop - body.clientHeight < 30);
-        var span = document.createElement('span');
-        span.innerHTML = highlightLogLine(line) + '\n';
-        content.appendChild(span);
-        // If a search is active, highlight matches in this newly-arrived line
-        // and refresh the count display without re-scanning the whole buffer.
+
+        var frag = document.createDocumentFragment();
+        var newSpans = [];
+        for (var i = 0; i < buf.length; i++) {
+            var span = document.createElement('span');
+            span.innerHTML = highlightLogLine(buf[i]) + '\n';
+            frag.appendChild(span);
+            newSpans.push(span);
+        }
+        content.appendChild(frag);
+
+        // If a search is active, highlight matches in newly-arrived lines and
+        // refresh the count once for the whole batch.
         if (searchState.open && searchState.query) {
-            var added = highlightMatchesIn(span);
+            var added = 0;
+            for (var j = 0; j < newSpans.length; j++) {
+                added += highlightMatchesIn(newSpans[j]);
+            }
             if (added > 0) {
                 searchState.matchCount += added;
                 refreshSearchCountLabel();
@@ -672,6 +706,11 @@
             logSource.close();
             logSource = null;
         }
+        // Drop any pending lines so they don't bleed into a new pod's modal
+        // (closeLogStream runs both when the modal closes and when the user
+        // switches pods via startLogStream).
+        logLineBuf = [];
+        logContentEl = null;
     }
 
     // ===== Pod Metrics (CPU + memory live chart) =====
@@ -1705,7 +1744,13 @@
             cmdRow: cmdRow,
             outEl: out,
             exitEl: cmdRow.querySelector('.term-exit'),
-            searchCtl: null
+            searchCtl: null,
+            // Pending output lines waiting for the next rAF flush. High-rate
+            // streams (kubectl logs on a noisy pod) deliver hundreds of SSE
+            // events per frame; coalescing them into one DOM update keeps the
+            // main thread responsive and avoids the "page unresponsive" prompt.
+            outBuf: [],
+            flushScheduled: false
         };
     }
 
@@ -1909,17 +1954,45 @@
         return ctl;
     }
 
+    // Buffers a single output line and schedules a coalesced flush. The actual
+    // DOM work happens in flushTermBlockOutput on the next animation frame, so
+    // a burst of SSE events from `kubectl logs` only pays one layout/trim cost
+    // per frame instead of one per line.
     function termAppendOutput(block, kind, line) {
         if (!block) return;
+        block.outBuf.push(kind, line || '');
+        if (block.flushScheduled) return;
+        block.flushScheduled = true;
+        requestAnimationFrame(function() { flushTermBlockOutput(block); });
+    }
+
+    function flushTermBlockOutput(block) {
+        block.flushScheduled = false;
+        var buf = block.outBuf;
+        if (!buf.length) return;
+        block.outBuf = [];
+
         var out = block.outEl;
         var atBottom = (out.scrollHeight - out.scrollTop - out.clientHeight) < 30;
-        var span = document.createElement('span');
-        if (kind === 'stderr') span.className = 'term-stderr';
-        else if (kind === 'info') span.className = 'term-info';
-        span.innerHTML = highlightLogLine(line || '') + '\n';
-        out.appendChild(span);
+
+        var frag = document.createDocumentFragment();
+        var newSpans = [];
+        for (var i = 0; i < buf.length; i += 2) {
+            var kind = buf[i];
+            var line = buf[i + 1];
+            var span = document.createElement('span');
+            if (kind === 'stderr') span.className = 'term-stderr';
+            else if (kind === 'info') span.className = 'term-info';
+            span.innerHTML = highlightLogLine(line) + '\n';
+            frag.appendChild(span);
+            newSpans.push(span);
+        }
+        out.appendChild(frag);
+
         var ctl = blockSearchByEl.get(block.el);
-        if (ctl) ctl.onAppend(span);
+        if (ctl) {
+            for (var j = 0; j < newSpans.length; j++) ctl.onAppend(newSpans[j]);
+        }
         termTrimToLimit();
         if (atBottom) out.scrollTop = out.scrollHeight;
     }
@@ -1957,6 +2030,7 @@
     window.termCancel = function() {
         if (!termRunning) return;
         termClose();
+        if (termActiveBlock) flushTermBlockOutput(termActiveBlock);
         termFinalize(termActiveBlock, 130, true);
         termActiveBlock = null;
         termSetRunning(false);
@@ -2008,6 +2082,9 @@
         termSource.addEventListener('done', function(e) {
             var code = parseInt(e.data, 10);
             if (isNaN(code)) code = -1;
+            // Drain any buffered output so the exit pill never lands before
+            // the last few lines do.
+            flushTermBlockOutput(block);
             termFinalize(block, code, false);
             termActiveBlock = null;
             termSetRunning(false);
