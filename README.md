@@ -57,7 +57,7 @@ Requires Go 1.26+.
 
 | Variable          | Default                                    | Purpose                                  |
 |-------------------|--------------------------------------------|------------------------------------------|
-| `KRO_PORT`        | `8000`                                     | HTTP listen port                         |
+| `KRO_PORT`        | `8222`                                     | HTTP listen port                         |
 | `KRO_VERBOSE`     | `false`                                    | rweb request logging                     |
 | `KUBECONFIG`      | `~/.kube/config`                           | Kubeconfig file (colon-separated merges) |
 | `KRO_STATE_FILE`  | `os.UserConfigDir()/kro/state.json`        | Pinned-namespaces JSON file              |
@@ -98,3 +98,33 @@ go run .
 
 ### Example Build with commit hash baked in
 `go build -ldflags "-X main.BuildNumber=$(git rev-parse --short HEAD)" -o ~/bin/kro`
+
+### Docker build
+`docker build --build-arg BUILD_NUMBER=$(git rev-parse --short HEAD) -t kro .`
+
+### Docker run
+
+Mount your kubeconfig (read-only) and a directory for kro's pinned-namespace
+state. The image's `app` user (UID 1001) reads kubeconfig from
+`/home/app/.kube/config` and writes state under `/home/app/.config/kro`.
+
+```sh
+docker run --rm -it -p 8222:8222 \
+  -v "$HOME/.kube/config:/home/app/.kube/config:ro" \
+  -v "$HOME/.config/kro:/home/app/.config/kro" \
+  kro
+```
+
+Or point at any host directory holding both — kubeconfig file named `config`
+and a writable spot for `state.json`:
+
+```sh
+docker run --rm -it -p 8222:8222 \
+  -v "/path/to/configs/kube:/home/app/.kube:ro" \
+  -v "/path/to/configs/kro:/home/app/.config/kro" \
+  kro
+```
+
+The mounted host directory for state must be writable by UID 1001
+(`chown 1001 /path/to/configs/kro` or `chmod 777`). Use a named volume
+(`-v kro-state:/home/app/.config/kro`) if you'd rather Docker manage it.
