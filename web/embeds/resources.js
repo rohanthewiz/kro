@@ -2137,6 +2137,53 @@
         return v.lastIndexOf('\n') === -1 || s > v.lastIndexOf('\n');
     }
 
+    // If text is selected inside the terminal output pane (not in the input
+    // itself), return it. Otherwise return ''. Used by Ctrl/Cmd+Enter to
+    // splice a selected pod/resource name into the command input.
+    function getTermBlocksSelection() {
+        if (!termBlocks) return '';
+        var sel = window.getSelection ? window.getSelection() : null;
+        if (!sel || sel.isCollapsed || sel.rangeCount === 0) return '';
+        var text = sel.toString();
+        if (!text) return '';
+        var anchor = sel.anchorNode;
+        var focus = sel.focusNode;
+        if (!anchor || !focus) return '';
+        if (!termBlocks.contains(anchor) || !termBlocks.contains(focus)) return '';
+        return text;
+    }
+
+    function insertIntoTermInput(text) {
+        if (!termInput || !text) return;
+        var v = termInput.value;
+        var start = termInput.selectionStart;
+        var end = termInput.selectionEnd;
+        var needsSpace = start > 0 && !/\s/.test(v.charAt(start - 1));
+        var insert = (needsSpace ? ' ' : '') + text;
+        termInput.value = v.slice(0, start) + insert + v.slice(end);
+        var caret = start + insert.length;
+        termInput.selectionStart = termInput.selectionEnd = caret;
+        refreshTermHighlight();
+        autosizeTermInput();
+        // Drop the page selection so the next Enter just runs the command.
+        var s = window.getSelection ? window.getSelection() : null;
+        if (s && s.removeAllRanges) s.removeAllRanges();
+    }
+
+    // Document-level handler so the shortcut works even when focus has left
+    // the input (which it has, right after you drag-select output text).
+    function onDocTermInsertKey(e) {
+        if (e.key !== 'Enter') return;
+        if (e.shiftKey || e.altKey) return;
+        if (!(e.ctrlKey || e.metaKey)) return;
+        var picked = getTermBlocksSelection();
+        if (!picked) return;
+        e.preventDefault();
+        e.stopPropagation();
+        insertIntoTermInput(picked);
+        if (termInput) termInput.focus();
+    }
+
     function onTermKeydown(e) {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -2381,6 +2428,9 @@
 
         document.addEventListener('selectionchange', onTermSelectionChange);
         document.addEventListener('mousedown', onDocClickForCtxMenu);
+        // Capture phase so we intercept before the textarea's plain-Enter
+        // handler would run (and before any other Enter listeners).
+        document.addEventListener('keydown', onDocTermInsertKey, true);
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') hideTermCtxMenu();
         });
