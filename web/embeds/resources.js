@@ -166,16 +166,90 @@
         selectAndReload({ namespace: ns });
     }
 
+    // ===== Tab layout =====
+    // Each tab owns a list of section slugs that should render into its panel.
+    // The terminal lives in the DOM as a server-rendered child of the workloads
+    // panel, so it isn't listed here. "all-pods" appears in two tabs on
+    // purpose (workloads and deployments) — JS routes through the same
+    // sectionBuilders entry and the duplicate is handled by collapse-by-slug.
+    var TAB_CONFIG = [
+        { id: 'workloads',   sections: ['jobs', 'all-pods', 'pods-orphan'] },
+        { id: 'deployments', sections: ['deployments', 'all-pods'] },
+        { id: 'networking',  sections: ['services', 'ingresses'] },
+        { id: 'sets',        sections: ['statefulsets', 'daemonsets'] },
+        { id: 'config',      sections: ['configmaps', 'secrets'] }
+    ];
+    var ACTIVE_TAB_KEY = 'kro_active_tab';
+    var TAB_SIDEBAR_COLLAPSED_KEY = 'kro_tab_sidebar_collapsed';
+
+    window.toggleTabSidebar = function() {
+        var bar = document.getElementById('tab-sidebar');
+        if (!bar) return;
+        var nowCollapsed = !bar.classList.contains('collapsed');
+        bar.classList.toggle('collapsed', nowCollapsed);
+        if (nowCollapsed) localStorage.setItem(TAB_SIDEBAR_COLLAPSED_KEY, '1');
+        else localStorage.removeItem(TAB_SIDEBAR_COLLAPSED_KEY);
+        var btn = document.getElementById('tab-collapse-toggle');
+        if (btn) {
+            btn.setAttribute('aria-label', nowCollapsed ? 'Expand tab sidebar' : 'Collapse tab sidebar');
+            btn.setAttribute('title', nowCollapsed ? 'Expand sidebar' : 'Collapse sidebar');
+        }
+    };
+
+    function initTabSidebarCollapsed() {
+        if (localStorage.getItem(TAB_SIDEBAR_COLLAPSED_KEY) !== '1') return;
+        var bar = document.getElementById('tab-sidebar');
+        if (bar) bar.classList.add('collapsed');
+        var btn = document.getElementById('tab-collapse-toggle');
+        if (btn) {
+            btn.setAttribute('aria-label', 'Expand tab sidebar');
+            btn.setAttribute('title', 'Expand sidebar');
+        }
+    }
+
+    function getActiveTab() {
+        var saved = localStorage.getItem(ACTIVE_TAB_KEY);
+        for (var i = 0; i < TAB_CONFIG.length; i++) {
+            if (TAB_CONFIG[i].id === saved) return saved;
+        }
+        return TAB_CONFIG[0].id;
+    }
+
+    window.switchTab = function(id) {
+        var btns = document.querySelectorAll('.tab-btn');
+        for (var i = 0; i < btns.length; i++) {
+            btns[i].classList.toggle('active', btns[i].getAttribute('data-tab') === id);
+        }
+        var panels = document.querySelectorAll('.tab-panel');
+        for (var j = 0; j < panels.length; j++) {
+            panels[j].classList.toggle('active', panels[j].getAttribute('data-tab-panel') === id);
+        }
+        localStorage.setItem(ACTIVE_TAB_KEY, id);
+    };
+
+    function initTabs() {
+        var btns = document.querySelectorAll('.tab-btn');
+        for (var i = 0; i < btns.length; i++) {
+            (function(btn) {
+                btn.addEventListener('click', function() {
+                    window.switchTab(btn.getAttribute('data-tab'));
+                });
+            })(btns[i]);
+        }
+        window.switchTab(getActiveTab());
+        initTabSidebarCollapsed();
+    }
+
     // ===== Resource Display =====
     function applyTree(tree) {
-        var container = document.getElementById('resources-content');
-        if (!container) return;
+        var anchor = document.getElementById('tab-sections-workloads');
+        if (!anchor) return;
         if (tree.error) {
-            container.innerHTML = '<div class="empty-state">' + escapeHtml(tree.error) + '</div>';
+            renderErrorAcrossTabs(tree.error);
             updateSummary(0, 0, 0, 0);
             return;
         }
-        rebuildTables(container, tree);
+        rebuildTables(tree);
         var totalPods = countPods(tree);
         updateSummary(
             (tree.jobs || []).length,
@@ -185,16 +259,25 @@
         );
     }
 
+    function renderErrorAcrossTabs(msg) {
+        var safe = escapeHtml(msg);
+        for (var i = 0; i < TAB_CONFIG.length; i++) {
+            var el = document.getElementById('tab-sections-' + TAB_CONFIG[i].id);
+            if (el) el.innerHTML = '<div class="empty-state">' + safe + '</div>';
+        }
+    }
+
     window.refreshResources = function() {
-        var container = document.getElementById('resources-content');
-        if (!container) return;
-        container.innerHTML = '<div class="loading">Loading resources</div>';
+        for (var i = 0; i < TAB_CONFIG.length; i++) {
+            var el = document.getElementById('tab-sections-' + TAB_CONFIG[i].id);
+            if (el) el.innerHTML = '<div class="loading">Loading resources</div>';
+        }
 
         fetch('/api/resources')
         .then(function(r) { return r.json(); })
         .then(applyTree)
         .catch(function(err) {
-            container.innerHTML = '<div class="empty-state">Failed to fetch resources: ' + escapeHtml(err.message) + '</div>';
+            renderErrorAcrossTabs('Failed to fetch resources: ' + err.message);
         });
     };
 
@@ -224,64 +307,96 @@
         if (el) el.textContent = val;
     }
 
-    function rebuildTables(container, tree) {
-        var html = '';
+    // Compute the flat "All Pods" list once per refresh — every workload kind
+    // contributes its child pods plus any orphans, sorted by name.
+    function buildAllPods(tree) {
+        var all = [];
+        (tree.jobs || []).forEach(function(job) { (job.children || []).forEach(function(p) { all.push(p); }); });
+        (tree.deployments || []).forEach(function(d) { (d.children || []).forEach(function(rs) { (rs.children || []).forEach(function(p) { all.push(p); }); }); });
+        (tree.statefulsets || []).forEach(function(s) { (s.children || []).forEach(function(p) { all.push(p); }); });
+        (tree.daemonsets || []).forEach(function(s) { (s.children || []).forEach(function(p) { all.push(p); }); });
+        (tree.orphan_pods || []).forEach(function(p) { all.push(p); });
+        all.sort(function(a, b) { return (a.name || '').localeCompare(b.name || ''); });
+        return all;
+    }
 
+    // SECTION_BUILDERS maps a section slug to the function that renders its
+    // HTML. Builders are invoked per-tab; when a section appears in two tabs
+    // (e.g. "all-pods" in workloads and deployments) we render twice but the
+    // collapse state is keyed only by slug, so the two stay in sync.
+    var SECTION_BUILDERS = {
+        'jobs': function(ctx) {
+            return sectionHierarchical('jobs', 'Jobs', ctx.tree.jobs || [], 'job');
+        },
+        'all-pods': function(ctx) {
+            var pods = ctx.allPods;
+            var body;
+            if (pods.length > 0) {
+                body = '<div class="table-wrapper"><table>' + tableHead() + '<tbody>';
+                pods.forEach(function(pod) { body += parentRow('', pod, false); });
+                body += '</tbody></table></div>';
+            } else {
+                body = '<div class="table-wrapper"><div class="empty-state">No pods found</div></div>';
+            }
+            return sectionShell('all-pods', 'All Pods', pods.length, body);
+        },
+        'pods-orphan': function(ctx) {
+            var orphans = ctx.tree.orphan_pods || [];
+            if (orphans.length === 0) return '';
+            var body = '<div class="table-wrapper"><table>' + tableHead() + '<tbody>';
+            orphans.forEach(function(pod) { body += parentRow('', pod, false); });
+            body += '</tbody></table></div>';
+            return sectionShell('pods-orphan', 'Pods (orphan)', orphans.length, body);
+        },
+        'deployments': function(ctx) {
+            return sectionDeployments(ctx.tree.deployments || []);
+        },
+        'statefulsets': function(ctx) {
+            return sectionHierarchical('statefulsets', 'StatefulSets', ctx.tree.statefulsets || [], 'sts');
+        },
+        'daemonsets': function(ctx) {
+            return sectionHierarchical('daemonsets', 'DaemonSets', ctx.tree.daemonsets || [], 'ds');
+        },
+        'services': function(ctx) {
+            return flatSection('services', 'Services', ctx.tree.services || []);
+        },
+        'ingresses': function(ctx) {
+            return flatSection('ingresses', 'Ingresses', ctx.tree.ingresses || []);
+        },
+        'configmaps': function(ctx) {
+            return flatSection('configmaps', 'ConfigMaps', ctx.tree.configmaps || []);
+        },
+        'secrets': function(ctx) {
+            return flatSection('secrets', 'Secrets', ctx.tree.secrets || []);
+        }
+    };
+
+    function rebuildTables(tree) {
+        var ctx = { tree: tree, allPods: buildAllPods(tree) };
+
+        var warningsHTML = '';
         var warnings = tree.warnings || [];
         if (warnings.length > 0) {
-            html += '<div class="warnings-bar">';
+            warningsHTML = '<div class="warnings-bar">';
             warnings.forEach(function(w) {
-                html += '<div class="warning-item">⚠ ' + escapeHtml(w) + '</div>';
+                warningsHTML += '<div class="warning-item">⚠ ' + escapeHtml(w) + '</div>';
             });
-            html += '</div>';
+            warningsHTML += '</div>';
         }
 
-        // Jobs
-        html += sectionHierarchical('jobs', 'Jobs', tree.jobs || [], 'job');
-
-        // Other pods (computed up-front so All Pods can include them)
-        var orphans = tree.orphan_pods || [];
-
-        // Flat all pods — placed just below Jobs for quick scanning
-        var allPods = [];
-        (tree.jobs || []).forEach(function(job) { (job.children || []).forEach(function(p) { allPods.push(p); }); });
-        (tree.deployments || []).forEach(function(d) { (d.children || []).forEach(function(rs) { (rs.children || []).forEach(function(p) { allPods.push(p); }); }); });
-        (tree.statefulsets || []).forEach(function(s) { (s.children || []).forEach(function(p) { allPods.push(p); }); });
-        (tree.daemonsets || []).forEach(function(s) { (s.children || []).forEach(function(p) { allPods.push(p); }); });
-        orphans.forEach(function(p) { allPods.push(p); });
-        allPods.sort(function(a, b) { return (a.name || '').localeCompare(b.name || ''); });
-
-        var allPodsBody;
-        if (allPods.length > 0) {
-            allPodsBody = '<div class="table-wrapper"><table>' + tableHead() + '<tbody>';
-            allPods.forEach(function(pod) { allPodsBody += parentRow('', pod, false); });
-            allPodsBody += '</tbody></table></div>';
-        } else {
-            allPodsBody = '<div class="table-wrapper"><div class="empty-state">No pods found</div></div>';
+        // Warnings appear at the top of the first tab only — they're a
+        // cluster-level signal and would just be noise on every panel.
+        for (var i = 0; i < TAB_CONFIG.length; i++) {
+            var tab = TAB_CONFIG[i];
+            var anchor = document.getElementById('tab-sections-' + tab.id);
+            if (!anchor) continue;
+            var html = (i === 0 ? warningsHTML : '');
+            for (var j = 0; j < tab.sections.length; j++) {
+                var builder = SECTION_BUILDERS[tab.sections[j]];
+                if (builder) html += builder(ctx);
+            }
+            anchor.innerHTML = html;
         }
-        html += sectionShell('all-pods', 'All Pods', allPods.length, allPodsBody);
-
-        // Deployments + ReplicaSets + Pods
-        html += sectionDeployments(tree.deployments || []);
-
-        // StatefulSets / DaemonSets
-        html += sectionHierarchical('statefulsets', 'StatefulSets', tree.statefulsets || [], 'sts');
-        html += sectionHierarchical('daemonsets', 'DaemonSets', tree.daemonsets || [], 'ds');
-
-        if (orphans.length > 0) {
-            var orphanBody = '<div class="table-wrapper"><table>' + tableHead() + '<tbody>';
-            orphans.forEach(function(pod) { orphanBody += parentRow('', pod, false); });
-            orphanBody += '</tbody></table></div>';
-            html += sectionShell('pods-orphan', 'Pods (orphan)', orphans.length, orphanBody);
-        }
-
-        // Read-only sections (no children)
-        html += flatSection('services', 'Services', tree.services || []);
-        html += flatSection('ingresses', 'Ingresses', tree.ingresses || []);
-        html += flatSection('configmaps', 'ConfigMaps', tree.configmaps || []);
-        html += flatSection('secrets', 'Secrets', tree.secrets || []);
-
-        container.innerHTML = html;
     }
 
     // ===== Section collapse/expand =====
@@ -294,10 +409,16 @@
     }
 
     window.toggleSection = function(slug) {
-        var el = document.querySelector('[data-section="' + slug + '"]');
-        if (!el) return;
-        var nowCollapsed = !el.classList.contains('collapsed');
-        el.classList.toggle('collapsed', nowCollapsed);
+        // A section may render in more than one tab (e.g. "all-pods" lives in
+        // both the workloads and deployments panels). Toggle all instances so
+        // collapse state stays consistent across tabs and matches the
+        // localStorage flag we persist below.
+        var els = document.querySelectorAll('[data-section="' + slug + '"]');
+        if (!els.length) return;
+        var nowCollapsed = !els[0].classList.contains('collapsed');
+        for (var i = 0; i < els.length; i++) {
+            els[i].classList.toggle('collapsed', nowCollapsed);
+        }
         if (nowCollapsed) localStorage.setItem(COLLAPSE_KEY_PREFIX + slug, '1');
         else localStorage.removeItem(COLLAPSE_KEY_PREFIX + slug);
     };
@@ -2509,6 +2630,7 @@
             }, 100);
         });
 
+        initTabs();
         initTerminal();
 
         // Initial bootstrap: load contexts → namespaces → resources → SSE.

@@ -316,6 +316,161 @@ body.dark .metrics-swatch.total {
 .summary-card.services .value { color: #2980b9; }
 .summary-card.source .value { font-size: 0.9rem; color: #636e72; }
 
+/* ===== Tabbed layout =====
+   Left vertical sidebar + right content area. The sidebar is sticky so it
+   stays in view as the user scrolls a long panel. Each .tab-panel is
+   display:none unless it carries .active. Section assignment lives in JS
+   (TAB_CONFIG); this stylesheet only owns presentation. */
+.tab-layout {
+    display: flex;
+    align-items: flex-start;
+    gap: 18px;
+}
+
+.tab-sidebar {
+    flex: 0 0 180px;
+    position: sticky;
+    top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    transition: flex-basis 0.18s ease-out, padding 0.18s ease-out;
+}
+.tab-sidebar.collapsed { flex: 0 0 50px; padding: 8px 6px; }
+
+.tab-collapse-toggle {
+    align-self: flex-end;
+    background: transparent;
+    border: 1px solid #dfe6e9;
+    border-radius: 6px;
+    color: #636e72;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 2px 8px;
+    transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.tab-collapse-toggle:hover { color: #0984e3; border-color: #0984e3; }
+.tab-collapse-chevron {
+    display: inline-block;
+    transition: transform 0.18s ease-out;
+}
+.tab-sidebar.collapsed .tab-collapse-toggle { align-self: center; }
+.tab-sidebar.collapsed .tab-collapse-chevron { transform: rotate(180deg); }
+
+.tab-btn {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    text-align: left;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    color: #2d3436;
+    font: inherit;
+    transition: background 0.12s, border-color 0.12s, color 0.12s, padding 0.18s ease-out;
+}
+.tab-btn:hover { background: #f1f2f6; }
+.tab-btn.active {
+    background: #eef4ff;
+    border-color: #b6d4ff;
+    color: #0a4cb3;
+    font-weight: 600;
+}
+.tab-btn-icon {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    background: #f1f3f5;
+    color: #636e72;
+    font-weight: 700;
+    font-size: 0.82rem;
+    line-height: 1;
+}
+.tab-btn.active .tab-btn-icon {
+    background: #b6d4ff;
+    color: #0a4cb3;
+}
+.tab-btn-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+.tab-btn-label {
+    font-size: 0.9rem;
+    font-weight: 600;
+    line-height: 1.1;
+}
+.tab-btn-sub {
+    font-size: 0.7rem;
+    color: #8395a7;
+    font-weight: 400;
+    line-height: 1.2;
+}
+.tab-btn.active .tab-btn-sub { color: #4a6fa5; }
+
+/* Collapsed sidebar: icons only, centered, no labels. */
+.tab-sidebar.collapsed .tab-btn {
+    padding: 6px;
+    justify-content: center;
+}
+.tab-sidebar.collapsed .tab-btn-text { display: none; }
+
+.tab-content {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+@media (max-width: 900px) {
+    .tab-layout { flex-direction: column; }
+    .tab-sidebar,
+    .tab-sidebar.collapsed {
+        position: static;
+        width: 100%;
+        flex: 0 0 auto;
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 4px;
+        padding: 8px;
+    }
+    .tab-collapse-toggle { display: none; }
+    .tab-btn { flex: 1 1 auto; }
+    .tab-btn-sub { display: none; }
+}
+
+body.dark .tab-sidebar {
+    background: #16213e;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+body.dark .tab-btn { color: #e0e0e0; }
+body.dark .tab-btn:hover { background: #1a2745; }
+body.dark .tab-btn.active {
+    background: #1d3461;
+    border-color: #54a0ff;
+    color: #74b9ff;
+}
+body.dark .tab-btn-sub { color: #8395a7; }
+body.dark .tab-btn.active .tab-btn-sub { color: #b6d4ff; }
+body.dark .tab-btn-icon { background: #1a2745; color: #b2bec3; }
+body.dark .tab-btn.active .tab-btn-icon { background: #54a0ff; color: #16213e; }
+body.dark .tab-collapse-toggle { color: #b2bec3; border-color: #2d2d44; }
+body.dark .tab-collapse-toggle:hover { color: #74b9ff; border-color: #74b9ff; }
+
 /* Resource sections */
 .resource-section {
     margin-bottom: 24px;

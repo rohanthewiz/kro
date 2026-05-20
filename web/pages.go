@@ -44,11 +44,7 @@ func renderPage(buildNumber string) string {
 					summaryCard(b, "services", "Services", "summary-services"),
 				),
 
-				terminalSection(b),
-
-				b.Div("id", "resources-content").R(
-					b.DivClass("loading").T("Loading resources"),
-				),
+				tabLayout(b),
 			),
 			b.Script().T(resourcesJS),
 		),
@@ -61,6 +57,90 @@ func summaryCard(b *element.Builder, cls, label, valueID string) any {
 	b.DivClass("summary-card " + cls).R(
 		b.DivClass("label").T(label),
 		b.Div("class", "value", "id", valueID).T("-"),
+	)
+	return nil
+}
+
+// tabLayout renders the left vertical tab sidebar and the five corresponding
+// content panels on the right. Section assignment is hardwired here and in
+// the JS TAB_CONFIG; the structure is meant to make tab-and-section
+// configurability a near-term follow-up (each panel has a stable id, and JS
+// reads the same config to populate them).
+//
+// Panel composition:
+//   workloads   — Terminal, Jobs, All Pods (+ Pods orphan if any)
+//   deployments — Deployments & ReplicaSets, All Pods
+//   networking  — Services, Ingresses
+//   sets        — StatefulSets, DaemonSets
+//   config      — ConfigMaps, Secrets
+func tabLayout(b *element.Builder) any {
+	tabs := []struct {
+		id, label, sub, icon string
+	}{
+		{"workloads", "Workloads", "Terminal · Jobs · Pods", "W"},
+		{"deployments", "Deployments", "Deployments · Pods", "D"},
+		{"networking", "Networking", "Services · Ingresses", "N"},
+		{"sets", "Sets", "StatefulSets · DaemonSets", "S"},
+		{"config", "Config", "ConfigMaps · Secrets", "C"},
+	}
+
+	b.DivClass("tab-layout").R(
+		b.Nav("class", "tab-sidebar", "id", "tab-sidebar", "role", "tablist", "aria-label", "Resource tabs").R(
+			b.Button(
+				"type", "button",
+				"class", "tab-collapse-toggle",
+				"id", "tab-collapse-toggle",
+				"onclick", "toggleTabSidebar()",
+				"aria-label", "Collapse tab sidebar",
+				"title", "Collapse sidebar",
+			).R(
+				b.Span("class", "tab-collapse-chevron").T("‹"),
+			),
+			b.Wrap(func() {
+				for i, t := range tabs {
+					cls := "tab-btn"
+					if i == 0 {
+						cls += " active"
+					}
+					b.Button(
+						"type", "button",
+						"class", cls,
+						"role", "tab",
+						"data-tab", t.id,
+						"aria-controls", "tab-panel-"+t.id,
+						"id", "tab-btn-"+t.id,
+						"title", t.label+" — "+t.sub,
+					).R(
+						b.Span("class", "tab-btn-icon").T(t.icon),
+						b.Span("class", "tab-btn-text").R(
+							b.Span("class", "tab-btn-label").T(t.label),
+							b.Span("class", "tab-btn-sub").T(t.sub),
+						),
+					)
+				}
+			}),
+		),
+		b.DivClass("tab-content").R(
+			// Workloads (active by default)
+			b.Div("class", "tab-panel active", "role", "tabpanel", "id", "tab-panel-workloads", "data-tab-panel", "workloads", "aria-labelledby", "tab-btn-workloads").R(
+				terminalSection(b),
+				b.Div("class", "tab-sections", "id", "tab-sections-workloads").R(
+					b.DivClass("loading").T("Loading resources"),
+				),
+			),
+			b.Div("class", "tab-panel", "role", "tabpanel", "id", "tab-panel-deployments", "data-tab-panel", "deployments", "aria-labelledby", "tab-btn-deployments").R(
+				b.Div("class", "tab-sections", "id", "tab-sections-deployments").R(),
+			),
+			b.Div("class", "tab-panel", "role", "tabpanel", "id", "tab-panel-networking", "data-tab-panel", "networking", "aria-labelledby", "tab-btn-networking").R(
+				b.Div("class", "tab-sections", "id", "tab-sections-networking").R(),
+			),
+			b.Div("class", "tab-panel", "role", "tabpanel", "id", "tab-panel-sets", "data-tab-panel", "sets", "aria-labelledby", "tab-btn-sets").R(
+				b.Div("class", "tab-sections", "id", "tab-sections-sets").R(),
+			),
+			b.Div("class", "tab-panel", "role", "tabpanel", "id", "tab-panel-config", "data-tab-panel", "config", "aria-labelledby", "tab-btn-config").R(
+				b.Div("class", "tab-sections", "id", "tab-sections-config").R(),
+			),
+		),
 	)
 	return nil
 }
