@@ -1,8 +1,8 @@
 // Pod Watch modal: starts a server-side watch of the selected namespace that
 // auto-streams logs of newly created pods to files in the background, lists
 // those streams with per-stream controls (tee to console, export/download,
-// pause/resume, stop), and shows up to two teed streams in side-by-side
-// console frames, each with a copy-to-clipboard button. Teeing an
+// pause/resume, stop), and shows up to four teed streams in up to a 2x2
+// grid of console frames, each with a copy-to-clipboard button. Teeing an
 // already-ended stream replays the last <console buffer> lines of its file.
 // Background streams are server-owned: closing this modal or reloading the
 // page never interrupts capture; reopening rebuilds the list from
@@ -10,7 +10,7 @@
 (function() {
     'use strict';
 
-    var MAX_TEE_FRAMES = 2;
+    var MAX_TEE_FRAMES = 4;
 
     // ===== Console frame buffer setting (gear popover) =====
     var WATCH_BUF_KEY = 'kro_watch_buf_lines';
@@ -560,9 +560,14 @@
         var framesEl = document.getElementById('watch-frames');
         var ph = document.getElementById('watch-frames-ph');
         if (!framesEl) return;
-        var any = Object.keys(frames).length > 0;
-        framesEl.classList.toggle('empty', !any);
-        ph.classList.toggle('hidden', any);
+        var n = Object.keys(frames).length;
+        framesEl.classList.toggle('empty', n === 0);
+        // count-N drives the grid layout: 1 full-width, 2 side-by-side,
+        // 3 with the last spanning the bottom row, 4 in a 2x2 grid.
+        for (var i = 1; i <= MAX_TEE_FRAMES; i++) {
+            framesEl.classList.toggle('count-' + i, n === i);
+        }
+        ph.classList.toggle('hidden', n > 0);
     }
 
     // rAF-batched append (same pattern as the log modal): lines accumulate in

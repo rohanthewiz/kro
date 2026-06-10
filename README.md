@@ -21,8 +21,8 @@ live updates over SSE, no cluster-side install.
   created after the watch starts gets its logs captured to a per-pod file under
   `os.UserConfigDir()/kro/watch-logs` (survives page reloads). The modal lists
   streams with pause/resume/stop, per-stream log export (download), and can
-  tee up to two streams into side-by-side live console frames, each with a
-  copy-to-clipboard button. Teeing an already-ended stream replays the last
+  tee up to four streams into live console frames (up to a 2x2 grid), each
+  with a copy-to-clipboard button. Teeing an already-ended stream replays the last
   `<console buffer>` lines from its file. Captured files auto-clean after
   `KRO_WATCH_LOG_RETENTION_DAYS` days; the ⚙ settings popover shows folder
   usage and offers manual cleanup.

@@ -1,4 +1,5 @@
-/* Pod Watch modal: stream list on top, up to two teed console frames below.
+/* Pod Watch modal: stream list on top, up to four teed console frames below
+   in up to a 2x2 grid.
    Reuses the .modal-overlay / .modal-dialog / .modal-header look from
    resources.css; everything watch-specific is namespaced .watch-*. */
 
@@ -204,14 +205,22 @@
 
 @keyframes watch-pulse { 50% { opacity: 0.55; } }
 
-/* Console frames */
+/* Console frames: count-N (set by watch.js) drives the layout — one frame
+   fills the area, two sit side-by-side, three put the last frame across the
+   bottom row, four form a 2x2 grid. */
 .watch-frames {
     flex: 1 1 auto;
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-auto-rows: minmax(0, 1fr);
     gap: 8px;
     padding: 8px;
     min-height: 0;
 }
+.watch-frames.count-2,
+.watch-frames.count-3,
+.watch-frames.count-4 { grid-template-columns: 1fr 1fr; }
+.watch-frames.count-3 .watch-frame:last-child { grid-column: 1 / -1; }
 .watch-frames.empty { display: none; }
 
 .watch-frames-placeholder {
@@ -225,8 +234,8 @@
 .watch-frames-placeholder.hidden { display: none; }
 
 .watch-frame {
-    flex: 1 1 0;
     min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     border: 1px solid #dfe6e9;
