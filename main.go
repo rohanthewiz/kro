@@ -6,6 +6,7 @@ import (
 
 	"kro/config"
 	"kro/kube"
+	"kro/podwatch"
 	"kro/state"
 	"kro/web"
 
@@ -42,7 +43,16 @@ func main() {
 	logger.InfoF("state file: %s", store.Path())
 
 	reg := kube.NewRegistry(raw, paths)
-	srv := web.NewServer(cfg, reg, store, BuildNumber)
+
+	watchLogDir, err := podwatch.DefaultLogDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "fatal: resolve watch log dir:", err)
+		os.Exit(1)
+	}
+	mgr := podwatch.NewManager(reg.Client, watchLogDir)
+	logger.InfoF("watch log dir: %s", watchLogDir)
+
+	srv := web.NewServer(cfg, reg, store, mgr, BuildNumber)
 
 	logger.InfoF("kro listening on :%s (build=%s)", cfg.Port, BuildNumber)
 	if err := srv.Run(); err != nil {

@@ -1,26 +1,48 @@
 package web
 
 import (
+	"encoding/json"
 	"runtime/debug"
+	"time"
 
 	"kro/config"
 	"kro/kube"
+	"kro/podwatch"
 	"kro/state"
 
+	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/rweb"
+	"github.com/rohanthewiz/serr"
 )
 
 // NewServer wires routes for the kro web UI.
 // All handlers close over the registry + store so they can resolve clients on demand.
 // buildNumber is the short commit hash injected via -ldflags at build time; if empty,
 // we fall back to runtime/debug VCS info so dev runs (`go run .`) still show a hash.
-func NewServer(cfg config.Config, reg *kube.ClientRegistry, store *state.Store, buildNumber string) *rweb.Server {
+func NewServer(cfg config.Config, reg *kube.ClientRegistry, store *state.Store, mgr *podwatch.Manager, buildNumber string) *rweb.Server {
 	svr := rweb.NewServer(rweb.ServerOptions{
 		Address: ":" + cfg.Port,
 		Verbose: cfg.Verbose,
 	})
 
-	h := &handlers{reg: reg, store: store, buildNumber: resolveBuildNumber(buildNumber)}
+	h := &handlers{reg: reg, store: store, mgr: mgr, buildNumber: resolveBuildNumber(buildNumber)}
+
+	// Long-lived hub broadcasting watch-manager status events (new pod
+	// streams, state changes, limit hits) to every open watch modal. Unlike
+	// the per-request log hubs, this one is shared: clients come and go,
+	// the hub stays.
+	watchHub := rweb.NewSSEHub(rweb.SSEHubOptions{
+		ChannelSize:       64,
+		HeartbeatInterval: 30 * time.Second,
+	})
+	mgr.SetNotify(func(event string, payload any) {
+		data, err := json.Marshal(map[string]any{"event": event, "payload": payload})
+		if err != nil {
+			logger.LogErr(serr.Wrap(err, "marshal watch event"))
+			return
+		}
+		watchHub.BroadcastRaw(rweb.SSEvent{Type: "watch", Data: string(data)})
+	})
 
 	svr.Get("/", h.Page)
 	svr.Get("/api/contexts", h.Contexts)
@@ -33,10 +55,16 @@ func NewServer(cfg config.Config, reg *kube.ClientRegistry, store *state.Store, 
 	svr.Get("/api/describe", h.Describe)
 	svr.Get("/api/logs", h.Logs)
 	svr.Delete("/api/resources", h.Delete)
+	svr.Post("/api/watch/start", h.WatchStart)
+	svr.Post("/api/watch/stop", h.WatchStop)
+	svr.Get("/api/watch/status", h.WatchStatus)
+	svr.Post("/api/watch/stream", h.WatchStreamAction)
 	svr.Get("/sse/resources", h.SSE(svr))
 	svr.Get("/sse/logs", h.LogsSSE(svr))
 	svr.Get("/sse/metrics", h.MetricsSSE(svr))
 	svr.Get("/sse/term", h.TermSSE(svr))
+	svr.Get("/sse/watch", watchHub.Handler(svr, "watch"))
+	svr.Get("/sse/watch-logs", h.WatchLogsSSE(svr))
 	svr.Get("/health", func(c rweb.Context) error { return c.WriteString("ok") })
 
 	return svr

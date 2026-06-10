@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"kro/kube"
+	"kro/podwatch"
 	"kro/state"
 
 	"github.com/rohanthewiz/logger"
@@ -19,6 +20,7 @@ import (
 type handlers struct {
 	reg         *kube.ClientRegistry
 	store       *state.Store
+	mgr         *podwatch.Manager
 	buildNumber string
 }
 

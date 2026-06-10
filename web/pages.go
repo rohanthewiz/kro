@@ -13,6 +13,12 @@ var resourcesCSS string
 //go:embed embeds/resources.js
 var resourcesJS string
 
+//go:embed embeds/watch.css
+var watchCSS string
+
+//go:embed embeds/watch.js
+var watchJS string
+
 // Page renders the single-page resources UI. Data is fetched client-side via
 // /api/resources and a live /sse/resources stream, both keyed off cookies set
 // by /api/select.
@@ -32,6 +38,7 @@ func renderPage(buildNumber string) string {
 			b.Title().T(pageName),
 			b.Style().T(headerCSS),
 			b.Style().T(resourcesCSS),
+			b.Style().T(watchCSS),
 		),
 		b.Body().R(
 			b.DivClass("container").R(
@@ -47,6 +54,7 @@ func renderPage(buildNumber string) string {
 				tabLayout(b),
 			),
 			b.Script().T(resourcesJS),
+			b.Script().T(watchJS),
 		),
 	)
 

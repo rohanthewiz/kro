@@ -822,6 +822,10 @@
         });
     }
 
+    // Shared with watch.js (the Pod Watch modal) so its console frames get
+    // the same log colorization. highlightLogLine HTML-escapes internally.
+    window.kroHighlight = highlightLogLine;
+
     function closeLogStream() {
         if (logSource) {
             logSource.close();
