@@ -20,8 +20,12 @@ live updates over SSE, no cluster-side install.
 - Pod Watch (◉ Watch): server-owned watch of the selected namespace; every pod
   created after the watch starts gets its logs captured to a per-pod file under
   `os.UserConfigDir()/kro/watch-logs` (survives page reloads). The modal lists
-  streams with pause/resume/stop and can tee up to two streams into
-  side-by-side live console frames.
+  streams with pause/resume/stop, per-stream log export (download), and can
+  tee up to two streams into side-by-side live console frames, each with a
+  copy-to-clipboard button. Teeing an already-ended stream replays the last
+  `<console buffer>` lines from its file. Captured files auto-clean after
+  `KRO_WATCH_LOG_RETENTION_DAYS` days; the ⚙ settings popover shows folder
+  usage and offers manual cleanup.
 - Live updates every ~10s via Server-Sent Events; each browser tab can target a
   different cluster/namespace independently (selection is cookie-keyed).
 - Resource sections organized behind left vertical tabs (Workloads,
@@ -69,6 +73,7 @@ Requires Go 1.26+.
 | `KUBECONFIG`        | `~/.kube/config`                     | Kubeconfig file (colon-separated merges) |
 | `KRO_STATE_FILE`    | `os.UserConfigDir()/kro/state.json`  | Pinned-namespaces JSON file              |
 | `KRO_WATCH_LOG_DIR` | `os.UserConfigDir()/kro/watch-logs`  | Pod Watch per-pod log files directory    |
+| `KRO_WATCH_LOG_RETENTION_DAYS` | `7`                       | Auto-delete watch logs older than this (`0` disables) |
 
 ## Layout
 
@@ -98,12 +103,15 @@ web/      rweb routes, handlers, SSE feeder, page render, embedded CSS/JS
 | POST   | `/api/watch/stop`          | Stop a watch session `{context, namespace}`            |
 | GET    | `/api/watch/status`        | All watch sessions and their pod streams               |
 | POST   | `/api/watch/stream`        | Apply stop/pause/resume/remove to one pod's stream `{context, namespace, pod, action}` |
+| GET    | `/api/watch/export?context=&namespace=&pod=` | Download one stream's log file (attachment) |
+| GET    | `/api/watch/loginfo`       | Watch-log folder path, file count, size, retention     |
+| POST   | `/api/watch/cleanup`       | Delete watch logs older than `{days}` (0 = all; listed streams' files kept) |
 | GET    | `/sse/resources`           | SSE stream of resource snapshots for the cookie scope  |
 | GET    | `/sse/logs?name=`          | SSE live log stream for a pod                          |
 | GET    | `/sse/metrics?name=`       | SSE per-pod CPU/memory samples from metrics.k8s.io     |
 | GET    | `/sse/term?cmd=...`        | Run `kubectl <cmd>` against active ctx/ns; SSE stdout/stderr/done |
 | GET    | `/sse/watch`               | SSE broadcast of Pod Watch session/stream state changes |
-| GET    | `/sse/watch-logs?context=&namespace=&pod=` | SSE log lines for a watched pod (ring-buffer replay, then live) |
+| GET    | `/sse/watch-logs?context=&namespace=&pod=&tail=` | SSE log lines for a watched pod (replay, then live; ended streams replay the last `tail` file lines) |
 | GET    | `/health`                  | Liveness probe                                         |
 
 ## Develop

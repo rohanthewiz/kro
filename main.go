@@ -50,7 +50,9 @@ func main() {
 		os.Exit(1)
 	}
 	mgr := podwatch.NewManager(reg.Client, watchLogDir)
-	logger.InfoF("watch log dir: %s", watchLogDir)
+	retention := podwatch.RetentionFromEnv()
+	mgr.StartJanitor(retention)
+	logger.InfoF("watch log dir: %s (retention=%v, 0s=auto-clean off)", watchLogDir, retention)
 
 	srv := web.NewServer(cfg, reg, store, mgr, BuildNumber)
 

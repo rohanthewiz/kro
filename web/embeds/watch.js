@@ -1,7 +1,9 @@
 // Pod Watch modal: starts a server-side watch of the selected namespace that
 // auto-streams logs of newly created pods to files in the background, lists
-// those streams with per-stream controls (tee to console, pause/resume,
-// stop), and shows up to two teed streams in side-by-side console frames.
+// those streams with per-stream controls (tee to console, export/download,
+// pause/resume, stop), and shows up to two teed streams in side-by-side
+// console frames, each with a copy-to-clipboard button. Teeing an
+// already-ended stream replays the last <console buffer> lines of its file.
 // Background streams are server-owned: closing this modal or reloading the
 // page never interrupts capture; reopening rebuilds the list from
 // /api/watch/status. Tee frames are client-local and reset on reload.
@@ -33,6 +35,13 @@
     var lastStatus = null;    // last /api/watch/status payload
     var frames = {};          // frameKey -> {key, ctx, ns, pod, el, body, status, es, buf, scheduled}
     var noticeTimer = null;
+
+    // Copy-to-clipboard icon: two overlapping rectangles.
+    var COPY_SVG =
+        '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor"' +
+        ' stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/>' +
+        '<path d="M10.5 2.5h-7a1 1 0 0 0-1 1v7"/></svg>';
 
     function esc(s) {
         return String(s == null ? '' : s)
@@ -81,6 +90,15 @@
                     '<input type="number" id="watch-buf-input" min="' + WATCH_BUF_MIN + '" max="' + WATCH_BUF_MAX + '" step="100">' +
                     '<div class="watch-settings-hint">' + WATCH_BUF_MIN + '–' + WATCH_BUF_MAX +
                         '. Oldest lines are dropped from the frame; the full log is always in the file.</div>' +
+                    '<div class="watch-settings-sep"></div>' +
+                    '<div class="watch-log-usage" id="watch-log-usage">log folder: …</div>' +
+                    '<label for="watch-clean-days">Delete log files older than (days)</label>' +
+                    '<div class="watch-clean-row">' +
+                        '<input type="number" id="watch-clean-days" min="0" max="3650" step="1">' +
+                        '<button type="button" class="watch-btn" id="watch-clean-btn">Clean up</button>' +
+                    '</div>' +
+                    '<div class="watch-settings-hint" id="watch-clean-hint">' +
+                        '0 = all. Files of streams still listed above are always kept.</div>' +
                 '</div>' +
                 '<div class="watch-controls">' +
                     '<button type="button" class="watch-btn primary" id="watch-start">▶ Start Watch</button>' +
@@ -99,6 +117,7 @@
         document.getElementById('watch-start').addEventListener('click', watchStart);
         document.getElementById('watch-gear').addEventListener('click', toggleSettings);
         document.getElementById('watch-stream-list').addEventListener('click', onListClick);
+        document.getElementById('watch-clean-btn').addEventListener('click', cleanupLogs);
 
         var bufInput = document.getElementById('watch-buf-input');
         bufInput.addEventListener('change', function() {
@@ -162,7 +181,46 @@
     }
 
     function toggleSettings() {
-        document.getElementById('watch-settings').classList.toggle('active');
+        var pop = document.getElementById('watch-settings');
+        pop.classList.toggle('active');
+        if (pop.classList.contains('active')) fetchLogInfo();
+    }
+
+    function fmtBytes(n) {
+        if (n < 1024) return n + ' B';
+        if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+        if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+        return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    }
+
+    function renderLogInfo(info) {
+        document.getElementById('watch-log-usage').innerHTML =
+            '<span title="' + esc(info.dir) + '">log folder</span>: ' +
+            info.files + ' file' + (info.files === 1 ? '' : 's') + ' · ' + fmtBytes(info.bytes) +
+            (info.retentionDays > 0
+                ? ' · auto-clean after ' + info.retentionDays + 'd'
+                : ' · auto-clean off');
+        var days = document.getElementById('watch-clean-days');
+        if (days.value === '') days.value = info.retentionDays > 0 ? info.retentionDays : 7;
+    }
+
+    function fetchLogInfo() {
+        fetch('/api/watch/loginfo')
+            .then(function(r) { return r.json(); })
+            .then(renderLogInfo)
+            .catch(function(err) { showNotice('log info fetch failed: ' + err); });
+    }
+
+    function cleanupLogs() {
+        var days = parseInt(document.getElementById('watch-clean-days').value, 10);
+        if (isNaN(days) || days < 0) { showNotice('Enter a number of days (0 = all)'); return; }
+        postJSON('/api/watch/cleanup', { days: days })
+            .then(function(res) {
+                showNotice('Cleanup: removed ' + res.removed + ' file' +
+                    (res.removed === 1 ? '' : 's') + ' (' + fmtBytes(res.freedBytes) + ')');
+                if (res.info) renderLogInfo(res.info);
+            })
+            .catch(function(err) { showNotice(err.message); });
     }
 
     function showNotice(msg) {
@@ -226,6 +284,10 @@
                     '" data-pod="' + esc(st.pod) + '"';
                 var actions = '<button type="button" class="watch-btn' + (teed ? ' tee-on' : '') +
                     '" data-act="tee"' + dataAttrs + ' title="Toggle console frame">⧉ Console</button>';
+                if (st.file) {
+                    actions += '<button type="button" class="watch-btn" data-act="export"' + dataAttrs +
+                        ' title="Export: download the log file">⤓</button>';
+                }
                 if (st.state === 'paused') {
                     actions += '<button type="button" class="watch-btn" data-act="resume"' + dataAttrs + ' title="Resume capture">▶</button>';
                 } else if (st.state === 'running' || st.state === 'starting') {
@@ -276,6 +338,8 @@
             watchStopSession(ctx, ns);
         } else if (act === 'tee') {
             toggleTee(ctx, ns, pod);
+        } else if (act === 'export') {
+            exportLog(ctx, ns, pod);
         } else {
             streamAction(ctx, ns, pod, act);
         }
@@ -313,6 +377,18 @@
         postJSON('/api/watch/stream', { context: ctx, namespace: ns, pod: pod, action: action })
             .then(fetchWatchStatus)
             .catch(function(err) { showNotice(err.message); });
+    }
+
+    // The server sets Content-Disposition: attachment, so a plain navigation
+    // becomes a save — the browser picks the location (Downloads / dialog).
+    function exportLog(ctx, ns, pod) {
+        var a = document.createElement('a');
+        a.href = '/api/watch/export?context=' + encodeURIComponent(ctx) +
+            '&namespace=' + encodeURIComponent(ns) + '&pod=' + encodeURIComponent(pod);
+        a.download = '';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
     }
 
     // ===== Status SSE (list updates while the modal is open) =====
@@ -385,6 +461,7 @@
             '<div class="watch-frame-head">' +
                 '<span class="pod">' + esc(pod) + '</span>' +
                 '<span class="watch-frame-status">connecting…</span>' +
+                '<button type="button" class="watch-frame-copy" title="Copy buffer to clipboard">' + COPY_SVG + '</button>' +
                 '<button type="button" class="watch-frame-close" title="Close frame (capture continues)">×</button>' +
             '</div>' +
             '<pre class="watch-frame-body"></pre>';
@@ -405,9 +482,15 @@
             renderFramesVisibility();
             renderStatus();
         });
+        el.querySelector('.watch-frame-copy').addEventListener('click', function() {
+            copyFrame(frame, this);
+        });
 
+        // tail: for an already-ended stream the server replays the last
+        // <console buffer> lines from the log file instead of the ring.
         var url = '/sse/watch-logs?context=' + encodeURIComponent(ctx) +
-            '&namespace=' + encodeURIComponent(ns) + '&pod=' + encodeURIComponent(pod);
+            '&namespace=' + encodeURIComponent(ns) + '&pod=' + encodeURIComponent(pod) +
+            '&tail=' + getWatchBufLines();
         frame.es = new EventSource(url);
         frame.es.onopen = function() { frame.status.textContent = 'live'; };
         frame.es.onerror = function() { frame.status.textContent = 'reconnecting…'; };
@@ -424,6 +507,40 @@
 
         frames[key] = frame;
         renderFramesVisibility();
+    }
+
+    // Copy the frame's visible buffer to the clipboard; swap the icon for a
+    // brief ✓ / ✗ as feedback. execCommand is the fallback for contexts
+    // where the async clipboard API is unavailable.
+    function copyFrame(frame, btn) {
+        var text = frame.body.textContent || '';
+        function done(ok) {
+            btn.innerHTML = ok ? '✓' : '✗';
+            btn.classList.add(ok ? 'copied' : 'copy-failed');
+            setTimeout(function() {
+                btn.innerHTML = COPY_SVG;
+                btn.classList.remove('copied', 'copy-failed');
+            }, 1200);
+        }
+        function fallback() {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            var ok = false;
+            try { ok = document.execCommand('copy'); } catch (_) {}
+            document.body.removeChild(ta);
+            return ok;
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(
+                function() { done(true); },
+                function() { done(fallback()); });
+        } else {
+            done(fallback());
+        }
     }
 
     function removeFrame(frame, detach) {

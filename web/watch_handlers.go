@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
+	"time"
 
 	"kro/podwatch"
 
@@ -89,4 +92,57 @@ func (h *handlers) WatchStreamAction(c rweb.Context) error {
 		return writeJSONErr(c, watchErrStatus(err), err)
 	}
 	return c.WriteJSON(map[string]string{"status": body.Action})
+}
+
+// WatchExport serves one stream's log file as a text download, flushing the
+// stream's write buffer first so the file is current.
+// GET /api/watch/export?context=..&namespace=..&pod=..
+func (h *handlers) WatchExport(c rweb.Context) error {
+	req := c.Request()
+	ctxName, ns, pod := req.QueryParam("context"), req.QueryParam("namespace"), req.QueryParam("pod")
+	if ctxName == "" || ns == "" || pod == "" {
+		return writeJSONErr(c, http.StatusBadRequest, serr.New("context, namespace, and pod are required"))
+	}
+	// Only the manager's own path for the stream is ever served — no
+	// client-supplied paths touch the filesystem.
+	path, err := h.mgr.ExportPath(ctxName, ns, pod)
+	if err != nil {
+		return writeJSONErr(c, watchErrStatus(err), err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return writeJSONErr(c, http.StatusInternalServerError, serr.Wrap(err, "read watch log file"))
+	}
+	res := c.Response()
+	res.SetHeader("Content-Type", "text/plain; charset=utf-8")
+	// The filename is built from sanitized segments, so it is quote-safe.
+	res.SetHeader("Content-Disposition", `attachment; filename="`+filepath.Base(path)+`"`)
+	_, err = res.Write(data)
+	return err
+}
+
+// WatchLogInfo reports the watch-log directory, its usage, and the
+// auto-clean retention for the settings popover.
+func (h *handlers) WatchLogInfo(c rweb.Context) error {
+	return c.WriteJSON(h.mgr.LogDirInfo())
+}
+
+// WatchCleanup deletes log files older than the requested number of days
+// (0 = everything not belonging to a listed stream). Body: {"days": N}.
+func (h *handlers) WatchCleanup(c rweb.Context) error {
+	var body struct {
+		Days *int `json:"days"`
+	}
+	if err := json.NewDecoder(bytes.NewReader(c.Request().Body())).Decode(&body); err != nil {
+		return writeJSONErr(c, http.StatusBadRequest, serr.Wrap(err, "invalid JSON"))
+	}
+	if body.Days == nil || *body.Days < 0 {
+		return writeJSONErr(c, http.StatusBadRequest, serr.New("days (>= 0) is required"))
+	}
+	removed, freed, err := h.mgr.Cleanup(time.Duration(*body.Days) * 24 * time.Hour)
+	if err != nil {
+		return writeJSONErr(c, http.StatusInternalServerError, err)
+	}
+	logger.InfoF("watch log cleanup (manual, >%dd): removed %d file(s), freed %d bytes", *body.Days, removed, freed)
+	return c.WriteJSON(map[string]any{"removed": removed, "freedBytes": freed, "info": h.mgr.LogDirInfo()})
 }

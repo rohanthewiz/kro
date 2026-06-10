@@ -1,6 +1,7 @@
 package web
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/rohanthewiz/rweb"
@@ -8,9 +9,14 @@ import (
 
 // WatchLogsSSE tees one background watch stream to a console frame:
 //
-//	GET /sse/watch-logs?context=..&namespace=..&pod=..
-//	event: log → data: "<line>"      (ring-buffer replay, then live)
+//	GET /sse/watch-logs?context=..&namespace=..&pod=..&tail=N
+//	event: log → data: "<line>"      (replay, then live)
 //	event: end → data: "stream ended" (stream stopped/completed)
+//
+// Replay is the in-memory ring for a live stream; for an already-ended
+// stream it is the last tail lines of the log file (the client sends its
+// console buffer size), so a stream that finished before the user got to
+// it still shows its history.
 //
 // Identification is explicit (not cookies) because the watch session is
 // bound to the selection it was started with. Same per-request hub pattern
@@ -27,7 +33,8 @@ func (h *handlers) WatchLogsSSE(svr *rweb.Server) rweb.Handler {
 			return writeTextErr(c, 400, "context, namespace, and pod are required")
 		}
 
-		replay, live, unsub, err := h.mgr.Subscribe(ctxName, ns, pod)
+		tail, _ := strconv.Atoi(req.QueryParam("tail")) // 0 on absent/garbage → ring replay only
+		replay, live, unsub, err := h.mgr.Subscribe(ctxName, ns, pod, tail)
 		if err != nil {
 			return writeTextErr(c, 404, err.Error())
 		}

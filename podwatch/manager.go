@@ -64,8 +64,9 @@ func (s StreamState) terminal() bool {
 
 // Manager coordinates watch sessions. One session per (context, namespace).
 type Manager struct {
-	logDir   string
-	clientFn func(ctxName string) (*kubernetes.Clientset, error)
+	logDir    string
+	clientFn  func(ctxName string) (*kubernetes.Clientset, error)
+	retention time.Duration // auto-clean age; written once by StartJanitor before serving
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -385,12 +386,19 @@ func (m *Manager) StreamAction(ctxName, ns, pod, action string) error {
 	return nil
 }
 
+// maxTailLines bounds how much of an ended stream's file Subscribe will
+// replay, regardless of what the client asks for.
+const maxTailLines = 100_000
+
 // Subscribe registers a console tee on a stream. The ring snapshot and the
 // subscriber registration happen under one lock, so replay + live delivery
 // has no gap and no duplicates. For a terminal stream the returned channel
-// is already closed (the caller still gets the replay). The returned cancel
-// is idempotent and safe to call after the stream closed the channel.
-func (m *Manager) Subscribe(ctxName, ns, pod string) (replay []string, ch <-chan string, cancel func(), err error) {
+// is already closed and, when tail > 0, the replay is the last tail lines
+// of the log file instead of the ring — the file is complete where the
+// ring caps out at ringLines (the ring is the fallback if the read fails).
+// The returned cancel is idempotent and safe to call after the stream
+// closed the channel.
+func (m *Manager) Subscribe(ctxName, ns, pod string, tail int) (replay []string, ch <-chan string, cancel func(), err error) {
 	m.mu.Lock()
 	sess, ok := m.sessions[sessKey(ctxName, ns)]
 	if !ok {
@@ -409,6 +417,11 @@ func (m *Manager) Subscribe(ctxName, ns, pod string) (replay []string, ch <-chan
 	replay = st.ringSnapshotLocked()
 	sub := make(chan string, subChanSize)
 	if st.subs == nil { // terminal: replay only
+		if tail > 0 && st.filePath != "" {
+			if fromFile, ferr := tailFile(st.filePath, min(tail, maxTailLines)); ferr == nil {
+				replay = fromFile
+			}
+		}
 		close(sub)
 		return replay, sub, func() {}, nil
 	}
@@ -424,6 +437,31 @@ func (m *Manager) Subscribe(ctxName, ns, pod string) (replay []string, ch <-chan
 		}
 	}
 	return replay, sub, cancel, nil
+}
+
+// ExportPath flushes a stream's buffered writer (so the file is current)
+// and returns the log file path, for serving the capture as a download.
+func (m *Manager) ExportPath(ctxName, ns, pod string) (string, error) {
+	m.mu.Lock()
+	sess, ok := m.sessions[sessKey(ctxName, ns)]
+	if !ok {
+		m.mu.Unlock()
+		return "", ErrNoSession
+	}
+	st, ok := sess.streams[pod]
+	if !ok {
+		m.mu.Unlock()
+		return "", ErrNoStream
+	}
+	m.mu.Unlock()
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.filePath == "" {
+		return "", ErrNoStream
+	}
+	st.flushLocked()
+	return st.filePath, nil
 }
 
 func (m *Manager) streamPayload(sess *Session, st *Stream) map[string]any {

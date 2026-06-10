@@ -2,9 +2,11 @@ package podwatch
 
 import (
 	"bufio"
+	"bytes"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/rohanthewiz/serr"
@@ -45,6 +47,52 @@ func sanitize(s string) string {
 func logFilePath(dir, ctxName, ns, pod string, t time.Time) string {
 	name := sanitize(pod) + "-" + t.UTC().Format(logFileTimeFormat) + ".log"
 	return filepath.Join(dir, sanitize(ctxName), sanitize(ns), name)
+}
+
+// tailChunkSize is how much tailFile reads per step while walking backwards.
+const tailChunkSize = 64 * 1024
+
+// tailFile returns up to n trailing lines of the file at path, reading
+// backwards in chunks so large logs are never loaded whole. Used to replay
+// an already-ended stream into a console frame: the file is authoritative
+// and can hold far more than the in-memory ring.
+func tailFile(path string, n int) ([]string, error) {
+	if n <= 0 {
+		return nil, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, serr.Wrap(err, "open log for tail")
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, serr.Wrap(err, "stat log for tail")
+	}
+
+	var buf []byte
+	off := info.Size()
+	for off > 0 && bytes.Count(buf, []byte{'\n'}) <= n {
+		readLen := min(off, int64(tailChunkSize))
+		off -= readLen
+		b := make([]byte, readLen)
+		if _, err := f.ReadAt(b, off); err != nil {
+			return nil, serr.Wrap(err, "read log tail")
+		}
+		buf = append(b, buf...)
+	}
+	if len(buf) == 0 {
+		return nil, nil
+	}
+
+	lines := strings.Split(strings.TrimSuffix(string(buf), "\n"), "\n")
+	if off > 0 && len(lines) > 0 {
+		lines = lines[1:] // we stopped mid-file: the first line may be partial
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return lines, nil
 }
 
 // openLogFile creates parent directories and opens the file for appending.
