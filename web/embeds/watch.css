@@ -2,15 +2,23 @@
    Reuses the .modal-overlay / .modal-dialog / .modal-header look from
    resources.css; everything watch-specific is namespaced .watch-*. */
 
-.watch-dialog {
+/* Anchor the dialog near the top of the viewport (instead of flex-centering)
+   so resizing/content growth expands downward and sideways, never above the
+   top of the app. */
+#watch-overlay.modal-overlay {
+    align-items: flex-start;
+    padding-top: 3vh;
+}
+
+.modal-dialog.watch-dialog {
     display: flex;
     flex-direction: column;
-    width: min(1200px, 92vw);
+    width: 94vw;
     height: min(760px, 86vh);
     min-width: 520px;
     min-height: 320px;
-    max-width: 96vw;
-    max-height: 92vh;
+    max-width: 98vw;
+    max-height: 94vh;
     resize: both;
     overflow: hidden;
 }

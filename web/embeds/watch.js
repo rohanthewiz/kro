@@ -132,14 +132,19 @@
     }
 
     // Minimal drag: shift the dialog via transform, anchored to the header.
+    // Movement is clamped so the dialog never leaves the viewport: the top
+    // edge can't go above the screen and the header always stays reachable.
     function attachDrag() {
         var handle = document.getElementById('watch-drag-handle');
         var dialog = overlay.querySelector('.watch-dialog');
         var startX = 0, startY = 0, baseX = 0, baseY = 0;
+        var origLeft = 0, origTop = 0, dlgW = 0;
 
         function onMove(e) {
-            var dx = e.clientX - startX, dy = e.clientY - startY;
-            dialog.style.transform = 'translate(' + (baseX + dx) + 'px,' + (baseY + dy) + 'px)';
+            var x = baseX + (e.clientX - startX), y = baseY + (e.clientY - startY);
+            x = Math.max(Math.min(x, window.innerWidth - origLeft - 120), -(origLeft + dlgW - 120));
+            y = Math.max(Math.min(y, window.innerHeight - origTop - 48), -origTop);
+            dialog.style.transform = 'translate(' + x + 'px,' + y + 'px)';
         }
         function onUp() {
             handle.classList.remove('dragging');
@@ -152,6 +157,8 @@
             if (e.target.closest('button')) return;
             e.preventDefault();
             startX = e.clientX; startY = e.clientY;
+            var r = dialog.getBoundingClientRect();
+            origLeft = r.left - baseX; origTop = r.top - baseY; dlgW = r.width;
             handle.classList.add('dragging');
             document.addEventListener('mousemove', onMove);
             document.addEventListener('mouseup', onUp);
