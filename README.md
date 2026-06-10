@@ -17,9 +17,16 @@ live updates over SSE, no cluster-side install.
   active `--context`/`--namespace`), live stdout/stderr streamed back as
   Warp-style blocks. Multi-line editor with syntax highlight and ↑↓ history.
   Requires `kubectl` on PATH.
+- Pod Watch (◉ Watch): server-owned watch of the selected namespace; every pod
+  created after the watch starts gets its logs captured to a per-pod file under
+  `os.UserConfigDir()/kro/watch-logs` (survives page reloads). The modal lists
+  streams with pause/resume/stop and can tee up to two streams into
+  side-by-side live console frames.
 - Live updates every ~10s via Server-Sent Events; each browser tab can target a
   different cluster/namespace independently (selection is cookie-keyed).
-- Collapsible sections (state persists per browser).
+- Resource sections organized behind left vertical tabs (Workloads,
+  Deployments, Networking, Sets, Config); sidebar collapses to an icon strip,
+  with tab/collapse state persisted per browser.
 - Dark mode.
 
 ## Install
@@ -50,23 +57,25 @@ Requires Go 1.26+.
 
 ```sh
 ./kro
-# then open http://localhost:8000
+# then open http://localhost:8222
 ```
 
 ### Environment
 
-| Variable          | Default                                    | Purpose                                  |
-|-------------------|--------------------------------------------|------------------------------------------|
-| `KRO_PORT`        | `8222`                                     | HTTP listen port                         |
-| `KRO_VERBOSE`     | `false`                                    | rweb request logging                     |
-| `KUBECONFIG`      | `~/.kube/config`                           | Kubeconfig file (colon-separated merges) |
-| `KRO_STATE_FILE`  | `os.UserConfigDir()/kro/state.json`        | Pinned-namespaces JSON file              |
+| Variable            | Default                              | Purpose                                  |
+|---------------------|--------------------------------------|------------------------------------------|
+| `KRO_PORT`          | `8222`                               | HTTP listen port                         |
+| `KRO_VERBOSE`       | `false`                              | rweb request logging                     |
+| `KUBECONFIG`        | `~/.kube/config`                     | Kubeconfig file (colon-separated merges) |
+| `KRO_STATE_FILE`    | `os.UserConfigDir()/kro/state.json`  | Pinned-namespaces JSON file              |
+| `KRO_WATCH_LOG_DIR` | `os.UserConfigDir()/kro/watch-logs`  | Pod Watch per-pod log files directory    |
 
 ## Layout
 
 ```
 config/   minimal env-driven config
 kube/     kubeconfig loader, per-context client registry, list/describe/logs/delete
+podwatch/ Pod Watch sessions: watch a namespace for new pods, stream logs to files
 state/    file-backed JSON store for pinned namespaces (per cluster)
 web/      rweb routes, handlers, SSE feeder, page render, embedded CSS/JS
 ```
@@ -80,12 +89,21 @@ web/      rweb routes, handlers, SSE feeder, page render, embedded CSS/JS
 | POST   | `/api/namespaces`          | Pin a namespace `{namespace, select?}`                 |
 | DELETE | `/api/namespaces?name=...` | Unpin a namespace                                      |
 | POST   | `/api/select`              | Set active `{context?, namespace?}` cookies            |
+| POST   | `/api/kubeconfig/merge`    | Upload a kubeconfig snippet (multipart `file`), merge into the primary kubeconfig, reload contexts |
 | GET    | `/api/resources`           | One-shot resource tree                                 |
 | GET    | `/api/describe?kind=&name=`| kubectl-describe text                                  |
 | GET    | `/api/logs?name=`          | Pod logs (all containers, last 500 lines each)         |
 | DELETE | `/api/resources`           | Delete a resource `{kind, name}`                       |
+| POST   | `/api/watch/start`         | Start a Pod Watch for the cookie-selected context/namespace |
+| POST   | `/api/watch/stop`          | Stop a watch session `{context, namespace}`            |
+| GET    | `/api/watch/status`        | All watch sessions and their pod streams               |
+| POST   | `/api/watch/stream`        | Apply stop/pause/resume/remove to one pod's stream `{context, namespace, pod, action}` |
 | GET    | `/sse/resources`           | SSE stream of resource snapshots for the cookie scope  |
+| GET    | `/sse/logs?name=`          | SSE live log stream for a pod                          |
+| GET    | `/sse/metrics?name=`       | SSE per-pod CPU/memory samples from metrics.k8s.io     |
 | GET    | `/sse/term?cmd=...`        | Run `kubectl <cmd>` against active ctx/ns; SSE stdout/stderr/done |
+| GET    | `/sse/watch`               | SSE broadcast of Pod Watch session/stream state changes |
+| GET    | `/sse/watch-logs?context=&namespace=&pod=` | SSE log lines for a watched pod (ring-buffer replay, then live) |
 | GET    | `/health`                  | Liveness probe                                         |
 
 ## Develop
