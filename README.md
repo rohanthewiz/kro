@@ -13,6 +13,12 @@ live updates over SSE, no cluster-side install.
   DaemonSets, plus flat read-only listings for Services, Ingresses, ConfigMaps, Secrets.
 - Per-row actions: Describe (kubectl-describe-style text), Logs (Pods, all containers),
   Delete (Job/Pod/Deployment/ReplicaSet only).
+- Log level filtering: both the Logs modal and Pod Watch console frames have
+  small colored Deb/Inf/Wrn/Err/Ftl buttons that show/hide lines by level
+  (detected from `level=...` fields or bare tokens like `INFO`/`ERRO`/`Wrn`;
+  unleveled lines such as stack traces follow the preceding line's level).
+  Filtering is pure CSS over already-rendered lines, so it's instant and
+  costs nothing while logs stream; the hidden set persists per browser.
 - Collapsible Terminal section: type kubectl arguments (auto-prefixed with the
   active `--context`/`--namespace`), live stdout/stderr streamed back as
   Warp-style blocks. Multi-line editor with syntax highlight and ↑↓ history.

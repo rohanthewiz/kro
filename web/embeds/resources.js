@@ -672,6 +672,7 @@
     function startLogStream(name) {
         closeLogStream();
         logSourcePod = name;
+        modalLastLvl = null;
         var content = document.getElementById('modal-content');
         if (!content) return;
         setStreamStatus('reconnecting', 'Connecting…');
@@ -690,7 +691,7 @@
             // EventSource will auto-reconnect on its own; surface state so
             // the user can see (and click) when the stream is stuck.
             setStreamStatus('reconnecting', 'Reconnecting…');
-            appendLogLine(content, '— disconnected, retrying —');
+            appendLogLine(content, '— disconnected, retrying —', true);
         };
     }
 
@@ -714,10 +715,11 @@
     var logLineBuf = [];
     var logFlushScheduled = false;
     var logContentEl = null;
+    var modalLastLvl = null; // level inherited by unleveled lines (stack traces etc.)
 
-    function appendLogLine(content, line) {
+    function appendLogLine(content, line, isMeta) {
         logContentEl = content;
-        logLineBuf.push(line);
+        logLineBuf.push(isMeta ? '\u0000' + line : line);
         if (logFlushScheduled) return;
         logFlushScheduled = true;
         requestAnimationFrame(flushLogLines);
@@ -737,17 +739,28 @@
         var newSpans = [];
         for (var i = 0; i < buf.length; i++) {
             var span = document.createElement('span');
-            span.innerHTML = highlightLogLine(buf[i]) + '\n';
+            if (buf[i].charCodeAt(0) === 0) {
+                // Meta lines (e.g. disconnect notices) carry no level class so
+                // they stay visible regardless of the active level filter.
+                span.className = 'log-meta';
+                span.textContent = buf[i].slice(1) + '\n';
+            } else {
+                span.innerHTML = highlightLogLine(buf[i]) + '\n';
+                var lvl = highlightLogLine.lastLevel || modalLastLvl;
+                if (lvl) { span.className = 'lvl-' + lvl; modalLastLvl = lvl; }
+            }
             frag.appendChild(span);
             newSpans.push(span);
         }
         content.appendChild(frag);
 
         // If a search is active, highlight matches in newly-arrived lines and
-        // refresh the count once for the whole batch.
+        // refresh the count once for the whole batch. Lines hidden by the
+        // level filter are skipped so the match count tracks what's visible.
         if (searchState.open && searchState.query) {
             var added = 0;
             for (var j = 0; j < newSpans.length; j++) {
+                if (lineSpanHidden(newSpans[j], content)) continue;
                 added += highlightMatchesIn(newSpans[j]);
             }
             if (added > 0) {
@@ -758,24 +771,51 @@
         if (atBottom && body) body.scrollTop = body.scrollHeight;
     }
 
+    // Map any recognized level token onto the five filter buckets. Covers the
+    // full words, logrus's 4-char console truncations (DEBU/ERRO/FATA/...),
+    // and 3-char short forms (Deb/Inf/Wrn/Err/Ftl).
+    var LEVEL_BUCKETS = {
+        trace: 'deb', trac: 'deb', trc: 'deb',
+        debug: 'deb', debu: 'deb', deb: 'deb', dbg: 'deb',
+        info: 'inf', inf: 'inf',
+        warn: 'wrn', warning: 'wrn', wrn: 'wrn',
+        error: 'err', erro: 'err', err: 'err',
+        fatal: 'ftl', fata: 'ftl', ftl: 'ftl', panic: 'ftl', pani: 'ftl'
+    };
+    // Bucket -> canonical CSS suffix for the existing .log-level-* colors.
+    var LEVEL_CANON = { deb: 'debug', inf: 'info', wrn: 'warn', err: 'error', ftl: 'fatal' };
+
+    function levelTokenClass(tok) {
+        var b = LEVEL_BUCKETS[tok.toLowerCase()];
+        return 'log-level log-level-' + (b ? LEVEL_CANON[b] : tok.toLowerCase());
+    }
+
     // Colorize a single log line. Handles two styles seen in pod logs:
     //   structured Go logs:  time="..." level=info msg="..."
     //   legacy/python logs:  INFO -- 05/01/2026 ... 'string' 'string'
     // Levels get conventional colors, dates/times are green, positive numbers
     // cyan, negatives orange, true/false get the same cyan/orange treatment,
     // and on error-level lines msg="..." is highlighted in maroon.
+    //
+    // As a side effect, the first level token found is recorded (as a filter
+    // bucket: deb/inf/wrn/err/ftl) in highlightLogLine.lastLevel — null when
+    // the line has no recognizable level. Callers use it to tag lines for
+    // level filtering; the level regex runs anyway, so this costs nothing.
     function highlightLogLine(line) {
         var escaped = escapeHtml(line);
+        var detected = null;
         var isError = /\blevel=(error|err|fatal)\b/i.test(line) ||
                       /\b(ERROR|FATAL)\b/.test(line);
 
         // Order matters: date/time alts come before bare numbers so a date's
-        // digit groups aren't picked off as standalone numbers.
+        // digit groups aren't picked off as standalone numbers, and longer
+        // level tokens come before their prefixes (ERROR before ERRO/ERR).
         var re = new RegExp([
             '\\bmsg=(&quot;.*?&quot;)',                                                // 1: msg val (only used when isError)
             '(\\w+)=(?=&quot;)',                                                       // 2: key before quoted value
             '\\blevel=([A-Za-z]+)',                                                    // 3: unquoted level value
-            '\\b(INFO|WARN(?:ING)?|ERROR|DEBUG|FATAL|TRACE)\\b',                       // 4: bare level token
+            '\\b(INFO|INF|Inf|WARN(?:ING)?|WRN|Wrn|ERROR|ERRO|ERR|Err|' +              // 4: bare level token
+                'DEBUG|DEBU|DEB|Deb|FATAL|FATA|FTL|Ftl|TRACE|TRAC|PANIC|PANI)\\b',
             '\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?',
             '\\d{2}/\\d{2}/\\d{4}\\s+\\d{1,2}:\\d{2}:\\d{2}(?:\\s*[AP]M)?',
             '\\d{4}-\\d{2}-\\d{2}',
@@ -785,20 +825,28 @@
             '-?\\b\\d+(?:\\.\\d+)?\\b',                                                // (no group) numbers
         ].join('|'), 'g');
 
-        return escaped.replace(re, function(m, msgVal, key, lvlVal, bareLvl, boolVal) {
+        var out = escaped.replace(re, function(m, msgVal, key, lvlVal, bareLvl, boolVal) {
             if (msgVal !== undefined) {
                 if (isError) return '<span class="log-msg-err">msg=' + msgVal + '</span>';
                 return '<span class="log-key">msg</span>=' + highlightInner(msgVal);
             }
             if (key !== undefined) return '<span class="log-key">' + key + '</span>=';
-            if (lvlVal) return '<span class="log-key">level</span>=<span class="log-level log-level-' + lvlVal.toLowerCase() + '">' + lvlVal + '</span>';
-            if (bareLvl) return '<span class="log-level log-level-' + bareLvl.toLowerCase() + '">' + bareLvl + '</span>';
+            if (lvlVal) {
+                if (!detected) detected = LEVEL_BUCKETS[lvlVal.toLowerCase()] || null;
+                return '<span class="log-key">level</span>=<span class="' + levelTokenClass(lvlVal) + '">' + lvlVal + '</span>';
+            }
+            if (bareLvl) {
+                if (!detected) detected = LEVEL_BUCKETS[bareLvl.toLowerCase()] || null;
+                return '<span class="' + levelTokenClass(bareLvl) + '">' + bareLvl + '</span>';
+            }
             if (boolVal !== undefined) return '<span class="log-bool log-bool-' + boolVal + '">' + boolVal + '</span>';
             // Whatever remains is a date/time or number — disambiguate by content.
             if (/^-/.test(m)) return '<span class="log-num-neg">' + m + '</span>';
             if (/^\d+(?:\.\d+)?$/.test(m)) return '<span class="log-num">' + m + '</span>';
             return '<span class="log-time">' + m + '</span>';
         });
+        highlightLogLine.lastLevel = detected;
+        return out;
     }
 
     // Re-highlight just the inner tokens (dates, numbers, booleans) of an
@@ -825,6 +873,82 @@
     // Shared with watch.js (the Pod Watch modal) so its console frames get
     // the same log colorization. highlightLogLine HTML-escapes internally.
     window.kroHighlight = highlightLogLine;
+
+    // ===== Log level filter =====
+    // Each line span is tagged lvl-<bucket> at render time; hiding a level is
+    // just toggling hide-<bucket> on the scroll container, so the filter is
+    // pure CSS — no re-render, no per-line work on toggle. The hidden set is
+    // persisted and seeds every new viewer (modal and watch frames alike);
+    // toggles act on their own view only.
+    var LVL_FILTER_KEY = 'kro_log_lvl_hidden';
+    var FILTER_LEVELS = ['deb', 'inf', 'wrn', 'err', 'ftl'];
+    var FILTER_LABELS = { deb: 'Deb', inf: 'Inf', wrn: 'Wrn', err: 'Err', ftl: 'Ftl' };
+
+    function getHiddenLevels() {
+        var out = {};
+        try {
+            var arr = JSON.parse(localStorage.getItem(LVL_FILTER_KEY) || '[]');
+            for (var i = 0; i < arr.length; i++) {
+                if (FILTER_LEVELS.indexOf(arr[i]) >= 0) out[arr[i]] = true;
+            }
+        } catch (_) {}
+        return out;
+    }
+
+    function saveHiddenLevel(lvl, hidden) {
+        var h = getHiddenLevels();
+        if (hidden) h[lvl] = true; else delete h[lvl];
+        var arr = [];
+        for (var k in h) arr.push(k);
+        localStorage.setItem(LVL_FILTER_KEY, JSON.stringify(arr));
+    }
+
+    function levelButtonsHTML(hidden) {
+        var html = '';
+        for (var i = 0; i < FILTER_LEVELS.length; i++) {
+            var l = FILTER_LEVELS[i];
+            html += '<button type="button" class="log-lvl-btn lvlb-' + l + (hidden[l] ? ' off' : '') +
+                '" data-lvl="' + l + '" title="Show/hide ' + FILTER_LABELS[l] + ' lines">' +
+                FILTER_LABELS[l] + '</button>';
+        }
+        return html;
+    }
+
+    function applyHiddenLevels(el, hidden) {
+        for (var i = 0; i < FILTER_LEVELS.length; i++) {
+            el.classList.toggle('hide-' + FILTER_LEVELS[i], !!hidden[FILTER_LEVELS[i]]);
+        }
+    }
+
+    // Wire a button group (event delegation, so innerHTML refreshes are fine)
+    // to filter contentEl. onChange runs after the container class flips.
+    function wireLevelButtons(btnsEl, contentEl, onChange) {
+        btnsEl.addEventListener('click', function(e) {
+            var btn = e.target.closest('button[data-lvl]');
+            if (!btn) return;
+            var lvl = btn.dataset.lvl;
+            var hidden = !btn.classList.contains('off');
+            btn.classList.toggle('off', hidden);
+            contentEl.classList.toggle('hide-' + lvl, hidden);
+            saveHiddenLevel(lvl, hidden);
+            if (onChange) onChange();
+        });
+    }
+
+    // True when the line span is suppressed by the active level filter of its
+    // container. Pure string checks — no layout read.
+    function lineSpanHidden(span, content) {
+        var m = /(?:^|\s)lvl-([a-z]+)/.exec(span.className);
+        return !!m && content.classList.contains('hide-' + m[1]);
+    }
+
+    // Shared with watch.js so console frames get the same level filtering.
+    window.kroLogFilter = {
+        getHidden: getHiddenLevels,
+        buttonsHTML: levelButtonsHTML,
+        apply: applyHiddenLevels,
+        wire: wireLevelButtons
+    };
 
     function closeLogStream() {
         if (logSource) {
@@ -1154,7 +1278,15 @@
             refreshSearchCountLabel();
             return;
         }
-        searchState.matchCount = highlightMatchesIn(content);
+        // Search line by line so lines hidden by the level filter get no
+        // marks — keeps the count honest and navigation on visible matches.
+        var total = 0;
+        var lines = content.children;
+        for (var i = 0; i < lines.length; i++) {
+            if (lineSpanHidden(lines[i], content)) continue;
+            total += highlightMatchesIn(lines[i], rx);
+        }
+        searchState.matchCount = total;
         refreshSearchCountLabel();
         if (searchState.matchCount > 0) navigateMatch(0, false);
     }
@@ -1240,6 +1372,7 @@
                     '<span class="log-status disconnected" id="modal-stream-dot"></span>' +
                     '<span class="modal-stream-label" id="modal-stream-label">Disconnected</span>' +
                 '</span>' +
+                '<span class="log-lvl-btns" id="modal-lvl-btns"></span>' +
                 '<button class="modal-search-toggle" id="modal-search-toggle" onclick="toggleLogSearch()" title="Search (Esc to close)" aria-label="Search">' +
                     '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
                         '<circle cx="7" cy="7" r="5"></circle>' +
@@ -1279,6 +1412,10 @@
             attachModalResize(dialogEl);
             var searchInput = document.getElementById('modal-search-input');
             if (searchInput) searchInput.addEventListener('keydown', handleSearchKeydown);
+            wireLevelButtons(
+                document.getElementById('modal-lvl-btns'),
+                document.getElementById('modal-content'),
+                function() { if (searchState.open && searchState.query) runSearch(); });
         }
         document.getElementById('modal-title').textContent = title;
         document.getElementById('modal-content').textContent = content;
@@ -1296,6 +1433,15 @@
         if (searchToggleEl) {
             searchToggleEl.style.display = (opts && opts.stream) ? '' : 'none';
             searchToggleEl.classList.remove('on');
+        }
+        var lvlBtnsEl = document.getElementById('modal-lvl-btns');
+        if (lvlBtnsEl) {
+            lvlBtnsEl.style.display = (opts && opts.stream) ? '' : 'none';
+            if (opts && opts.stream) {
+                var hiddenLvls = getHiddenLevels();
+                lvlBtnsEl.innerHTML = levelButtonsHTML(hiddenLvls);
+                applyHiddenLevels(document.getElementById('modal-content'), hiddenLvls);
+            }
         }
         var searchBarEl = document.getElementById('modal-search-bar');
         if (searchBarEl) searchBarEl.classList.remove('active');

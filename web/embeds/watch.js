@@ -468,6 +468,7 @@
             '<div class="watch-frame-head">' +
                 '<span class="pod">' + esc(pod) + '</span>' +
                 '<span class="watch-frame-status">connecting…</span>' +
+                '<span class="log-lvl-btns"></span>' +
                 '<button type="button" class="watch-frame-copy" title="Copy buffer to clipboard">' + COPY_SVG + '</button>' +
                 '<button type="button" class="watch-frame-close" title="Close frame (capture continues)">×</button>' +
             '</div>' +
@@ -481,8 +482,20 @@
             status: el.querySelector('.watch-frame-status'),
             es: null,
             buf: [],
-            scheduled: false
+            scheduled: false,
+            lastLvl: null // level inherited by unleveled lines (stack traces etc.)
         };
+
+        // Per-frame level filter buttons (helpers live in resources.js).
+        // Seeded from the persisted hidden set; toggles affect this frame only.
+        var LF = window.kroLogFilter;
+        if (LF) {
+            var lvlBtns = el.querySelector('.log-lvl-btns');
+            var hiddenLvls = LF.getHidden();
+            lvlBtns.innerHTML = LF.buttonsHTML(hiddenLvls);
+            LF.apply(frame.body, hiddenLvls);
+            LF.wire(lvlBtns, frame.body);
+        }
         el.querySelector('.watch-frame-close').addEventListener('click', function() {
             removeFrame(frame, true);
             delete frames[key];
@@ -597,6 +610,12 @@
                 span.textContent = buf[i].slice(1) + '\n';
             } else if (window.kroHighlight) {
                 span.innerHTML = window.kroHighlight(buf[i]) + '\n';
+                // Tag the line with its level bucket (detected as a free side
+                // effect of colorizing) so the level filter is pure CSS.
+                // Unleveled lines inherit the frame's last seen level, keeping
+                // stack traces with the error that produced them.
+                var lvl = window.kroHighlight.lastLevel || frame.lastLvl;
+                if (lvl) { span.className = 'lvl-' + lvl; frame.lastLvl = lvl; }
             } else {
                 span.textContent = buf[i] + '\n';
             }

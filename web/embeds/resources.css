@@ -1132,6 +1132,58 @@ body.dark .log-msg-err {
     background: rgba(192,57,43,0.18);
 }
 
+/* ===== Log level filter ===== */
+/* Lines are tagged lvl-<bucket> as they're rendered; hiding a level is one
+   class toggle on the scroll container, so filtering is pure CSS. */
+.hide-deb .lvl-deb,
+.hide-inf .lvl-inf,
+.hide-wrn .lvl-wrn,
+.hide-err .lvl-err,
+.hide-ftl .lvl-ftl { display: none; }
+
+/* Meta lines (disconnect notices etc.) — never filtered. */
+.log-meta { color: #8395a7; font-style: italic; }
+
+.log-lvl-btns {
+    display: inline-flex;
+    gap: 3px;
+    align-items: center;
+    flex: none;
+}
+.log-lvl-btn {
+    font-size: 9px;
+    font-weight: 700;
+    font-family: 'Monaco', 'Courier New', monospace;
+    line-height: 1;
+    padding: 3px 5px;
+    border-radius: 3px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    color: #fff;
+}
+.log-lvl-btn.lvlb-deb { background: #636e72; }
+.log-lvl-btn.lvlb-inf { background: #0a7ea4; }
+.log-lvl-btn.lvlb-wrn { background: #b6701a; }
+.log-lvl-btn.lvlb-err { background: #c0392b; }
+.log-lvl-btn.lvlb-ftl { background: #7b241c; }
+.log-lvl-btn.off {
+    background: transparent;
+    opacity: 0.55;
+}
+.log-lvl-btn.off.lvlb-deb { color: #636e72; border-color: #636e72; }
+.log-lvl-btn.off.lvlb-inf { color: #0a7ea4; border-color: #0a7ea4; }
+.log-lvl-btn.off.lvlb-wrn { color: #b6701a; border-color: #b6701a; }
+.log-lvl-btn.off.lvlb-err { color: #c0392b; border-color: #c0392b; }
+.log-lvl-btn.off.lvlb-ftl { color: #7b241c; border-color: #7b241c; }
+.log-lvl-btn:hover { opacity: 0.85; }
+.log-lvl-btn.off:hover { opacity: 0.75; }
+
+body.dark .log-lvl-btn.off.lvlb-deb { color: #b2bec3; border-color: #b2bec3; }
+body.dark .log-lvl-btn.off.lvlb-inf { color: #74b9ff; border-color: #74b9ff; }
+body.dark .log-lvl-btn.off.lvlb-wrn { color: #fdcb6e; border-color: #fdcb6e; }
+body.dark .log-lvl-btn.off.lvlb-err { color: #ff6b6b; border-color: #ff6b6b; }
+body.dark .log-lvl-btn.off.lvlb-ftl { color: #ff8a8a; border-color: #ff8a8a; }
+
 /* ===== Terminal section ===== */
 .term-section .section-header {
     flex-wrap: wrap;
