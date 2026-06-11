@@ -172,12 +172,16 @@
     // panel, so it isn't listed here. "all-pods" appears in two tabs on
     // purpose (workloads and deployments) — JS routes through the same
     // sectionBuilders entry and the duplicate is handled by collapse-by-slug.
+    // workloads stays first: TAB_CONFIG[0] is the default tab and the one
+    // that shows cluster warnings. The watch tab owns no resource sections —
+    // its panel is the Pod Watch page, built and managed by watch.js.
     var TAB_CONFIG = [
         { id: 'workloads',   sections: ['jobs', 'all-pods', 'pods-orphan'] },
         { id: 'deployments', sections: ['deployments', 'all-pods'] },
         { id: 'networking',  sections: ['services', 'ingresses'] },
         { id: 'sets',        sections: ['statefulsets', 'daemonsets'] },
-        { id: 'config',      sections: ['configmaps', 'secrets'] }
+        { id: 'config',      sections: ['configmaps', 'secrets'] },
+        { id: 'watch',       sections: [] }
     ];
     var ACTIVE_TAB_KEY = 'kro_active_tab';
     var TAB_SIDEBAR_COLLAPSED_KEY = 'kro_tab_sidebar_collapsed';
@@ -225,6 +229,13 @@
             panels[j].classList.toggle('active', panels[j].getAttribute('data-tab-panel') === id);
         }
         localStorage.setItem(ACTIVE_TAB_KEY, id);
+        // The Pod Watch page (watch.js) connects its status stream only while
+        // its tab is visible; tee frames persist across switches.
+        if (id === 'watch') {
+            if (window.watchPageActivate) window.watchPageActivate();
+        } else if (window.watchPageDeactivate) {
+            window.watchPageDeactivate();
+        }
     };
 
     function initTabs() {

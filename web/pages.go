@@ -76,16 +76,20 @@ func summaryCard(b *element.Builder, cls, label, valueID string) any {
 // reads the same config to populate them).
 //
 // Panel composition:
-//   workloads   — Terminal, Jobs, All Pods (+ Pods orphan if any)
+//   watch       — Pod Watch page (markup built by watch.js on first visit)
+//   workloads   — Terminal, Jobs, All Pods (+ Pods orphan if any); shown as "Pods"
 //   deployments — Deployments & ReplicaSets, All Pods
 //   networking  — Services, Ingresses
 //   sets        — StatefulSets, DaemonSets
 //   config      — ConfigMaps, Secrets
 func tabLayout(b *element.Builder) any {
+	// The workloads tab keeps its internal id (localStorage keys, section
+	// routing, JS TAB_CONFIG) but is presented as "Pods".
 	tabs := []struct {
 		id, label, sub, icon string
 	}{
-		{"workloads", "Workloads", "Terminal · Jobs · Pods", "W"},
+		{"watch", "Watch", "Pod log capture", "W"},
+		{"workloads", "Pods", "Terminal · Jobs · Pods", "P"},
 		{"deployments", "Deployments", "Deployments · Pods", "D"},
 		{"networking", "Networking", "Services · Ingresses", "N"},
 		{"sets", "Sets", "StatefulSets · DaemonSets", "S"},
@@ -105,9 +109,11 @@ func tabLayout(b *element.Builder) any {
 				b.Span("class", "tab-collapse-chevron").T("‹"),
 			),
 			b.Wrap(func() {
-				for i, t := range tabs {
+				for _, t := range tabs {
 					cls := "tab-btn"
-					if i == 0 {
+					// Pods (workloads) is the default tab; JS may switch to the
+					// last-used tab from localStorage right after load.
+					if t.id == "workloads" {
 						cls += " active"
 					}
 					b.Button(
@@ -129,7 +135,12 @@ func tabLayout(b *element.Builder) any {
 			}),
 		),
 		b.DivClass("tab-content").R(
-			// Workloads (active by default)
+			// Watch — Pod Watch page; watch.js builds the UI into #watch-page
+			// the first time the tab is activated.
+			b.Div("class", "tab-panel", "role", "tabpanel", "id", "tab-panel-watch", "data-tab-panel", "watch", "aria-labelledby", "tab-btn-watch").R(
+				b.Div("class", "watch-page", "id", "watch-page").R(),
+			),
+			// Pods / workloads (active by default)
 			b.Div("class", "tab-panel active", "role", "tabpanel", "id", "tab-panel-workloads", "data-tab-panel", "workloads", "aria-labelledby", "tab-btn-workloads").R(
 				terminalSection(b),
 				b.Div("class", "tab-sections", "id", "tab-sections-workloads").R(

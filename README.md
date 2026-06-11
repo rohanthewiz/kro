@@ -23,9 +23,10 @@ live updates over SSE, no cluster-side install.
   active `--context`/`--namespace`), live stdout/stderr streamed back as
   Warp-style blocks. Multi-line editor with syntax highlight and ↑↓ history.
   Requires `kubectl` on PATH.
-- Pod Watch (◉ Watch): server-owned watch of the selected namespace; every pod
+- Pod Watch (the Watch tab):
+  server-owned watch of the selected namespace; every pod
   created after the watch starts gets its logs captured to a per-pod file under
-  `os.UserConfigDir()/kro/watch-logs` (survives page reloads). The modal lists
+  `os.UserConfigDir()/kro/watch-logs` (survives page reloads). The page lists
   streams with pause/resume/stop, per-stream log export (download), and can
   tee up to four streams into live console frames (up to a 2x2 grid), each
   with a copy-to-clipboard button. Teeing an already-ended stream replays the last
@@ -34,7 +35,7 @@ live updates over SSE, no cluster-side install.
   usage and offers manual cleanup.
 - Live updates every ~10s via Server-Sent Events; each browser tab can target a
   different cluster/namespace independently (selection is cookie-keyed).
-- Resource sections organized behind left vertical tabs (Workloads,
+- Resource sections organized behind left vertical tabs (Watch, Pods,
   Deployments, Networking, Sets, Config); sidebar collapses to an icon strip,
   with tab/collapse state persisted per browser.
 - Dark mode.

@@ -1,31 +1,34 @@
-/* Pod Watch modal: stream list on top, up to four teed console frames below
-   in up to a 2x2 grid.
-   Reuses the .modal-overlay / .modal-dialog / .modal-header look from
-   resources.css; everything watch-specific is namespaced .watch-*. */
+/* Pod Watch page (the "Watch" tab): stream list on top, up to four teed
+   console frames below in up to a 2x2 grid. watch.js builds the markup into
+   #watch-page on first activation; everything is namespaced .watch-*. */
 
-/* Anchor the dialog near the top of the viewport (instead of flex-centering)
-   so resizing/content growth expands downward and sideways, never above the
-   top of the app. */
-#watch-overlay.modal-overlay {
-    align-items: flex-start;
-    padding-top: 3vh;
-}
-
-.modal-dialog.watch-dialog {
+.watch-page {
+    position: relative; /* anchors the settings popover */
     display: flex;
     flex-direction: column;
-    width: 94vw;
-    height: min(760px, 86vh);
-    min-width: 520px;
-    min-height: 320px;
-    max-width: 98vw;
-    max-height: 94vh;
-    resize: both;
+    height: calc(100vh - 250px);
+    min-height: 420px;
+    background: rgba(255, 255, 255, 0.8);
+    border: 1px solid #dfe6e9;
+    border-top: 1.5px solid #0984e3;
+    border-radius: 12px;
     overflow: hidden;
 }
 
-.watch-dialog .modal-header { cursor: grab; user-select: none; }
-.watch-dialog .modal-header.dragging { cursor: grabbing; }
+.watch-page-head {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid #dfe6e9;
+    flex: none;
+}
+
+.watch-page-title {
+    font-weight: 700;
+    font-size: 0.95rem;
+    font-family: "SF Mono", "Fira Code", Menlo, monospace;
+    color: #2d3436;
+}
 
 .watch-title-sub {
     font-size: 12px;
@@ -301,6 +304,13 @@
 .watch-frame-end { color: #8395a7; font-style: italic; }
 
 /* Dark mode */
+body.dark .watch-page {
+    background: rgba(30, 39, 46, 0.7);
+    border-color: #4a5568;
+    border-top-color: #0984e3;
+}
+body.dark .watch-page-head { border-color: #4a5568; }
+body.dark .watch-page-title { color: #e0e0e0; }
 body.dark .watch-title-sub,
 body.dark .watch-count,
 body.dark .watch-frame-head .watch-frame-status { color: #8395a7; }

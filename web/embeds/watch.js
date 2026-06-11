@@ -1,12 +1,14 @@
-// Pod Watch modal: starts a server-side watch of the selected namespace that
-// auto-streams logs of newly created pods to files in the background, lists
-// those streams with per-stream controls (tee to console, export/download,
-// pause/resume, stop), and shows up to four teed streams in up to a 2x2
-// grid of console frames, each with a copy-to-clipboard button. Teeing an
-// already-ended stream replays the last <console buffer> lines of its file.
-// Background streams are server-owned: closing this modal or reloading the
-// page never interrupts capture; reopening rebuilds the list from
-// /api/watch/status. Tee frames are client-local and reset on reload.
+// Pod Watch page (the "Watch" tab): starts a server-side watch of the
+// selected namespace that auto-streams logs of newly created pods to files in
+// the background, lists those streams with per-stream controls (tee to
+// console, export/download, pause/resume, stop), and shows up to four teed
+// streams in up to a 2x2 grid of console frames, each with a
+// copy-to-clipboard button. Teeing an already-ended stream replays the last
+// <console buffer> lines of its file. Background streams are server-owned:
+// leaving this tab or reloading the page never interrupts capture; returning
+// rebuilds the list from /api/watch/status. Tee frames are client-local:
+// they survive tab switches but reset on reload. resources.js calls
+// watchPageActivate()/watchPageDeactivate() from switchTab().
 (function() {
     'use strict';
 
@@ -30,8 +32,8 @@
     }
 
     // ===== State =====
-    var overlay = null;       // modal overlay element (built once)
-    var statusSSE = null;     // EventSource /sse/watch (open only while modal is)
+    var pageBuilt = false;    // page markup is built once, on first activation
+    var statusSSE = null;     // EventSource /sse/watch (open only while the tab is)
     var lastStatus = null;    // last /api/watch/status payload
     var frames = {};          // frameKey -> {key, ctx, ns, pod, el, body, status, es, buf, scheduled}
     var noticeTimer = null;
@@ -70,20 +72,17 @@
         };
     }
 
-    // ===== Modal shell =====
-    function buildModal() {
-        overlay = document.createElement('div');
-        overlay.className = 'modal-overlay';
-        overlay.id = 'watch-overlay';
-        overlay.innerHTML =
-            '<div class="modal-dialog wide watch-dialog">' +
-                '<div class="modal-header" id="watch-drag-handle">' +
-                    '<span class="modal-title">Pod Watch</span>' +
+    // ===== Page shell =====
+    function buildWatchPage() {
+        var page = document.getElementById('watch-page');
+        if (!page) return;
+        page.innerHTML =
+                '<div class="watch-page-head">' +
+                    '<span class="watch-page-title">Pod Watch</span>' +
                     '<span class="watch-title-sub" id="watch-title-sub"></span>' +
                     '<span class="watch-sse-dot" id="watch-sse-dot" title="Status event stream"></span>' +
                     '<span style="flex:1"></span>' +
                     '<button type="button" class="watch-gear" id="watch-gear" title="Watch settings">⚙</button>' +
-                    '<button type="button" class="modal-close" id="watch-close" title="Close (background streams keep running)">×</button>' +
                 '</div>' +
                 '<div class="watch-settings-pop" id="watch-settings">' +
                     '<label for="watch-buf-input">Console buffer (lines per frame)</label>' +
@@ -109,11 +108,9 @@
                 '<div class="watch-frames empty" id="watch-frames"></div>' +
                 '<div class="watch-frames-placeholder" id="watch-frames-ph">' +
                     'Tee a stream to the console to view it here (up to ' + MAX_TEE_FRAMES + ' frames)' +
-                '</div>' +
-            '</div>';
-        document.body.appendChild(overlay);
+                '</div>';
+        pageBuilt = true;
 
-        document.getElementById('watch-close').addEventListener('click', closeWatchModal);
         document.getElementById('watch-start').addEventListener('click', watchStart);
         document.getElementById('watch-gear').addEventListener('click', toggleSettings);
         document.getElementById('watch-stream-list').addEventListener('click', onListClick);
@@ -123,69 +120,30 @@
         bufInput.addEventListener('change', function() {
             bufInput.value = setWatchBufLines(bufInput.value);
         });
-
-        overlay.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') closeWatchModal();
-        });
-
-        attachDrag();
     }
 
-    // Minimal drag: shift the dialog via transform, anchored to the header.
-    // Movement is clamped so the dialog never leaves the viewport: the top
-    // edge can't go above the screen and the header always stays reachable.
-    function attachDrag() {
-        var handle = document.getElementById('watch-drag-handle');
-        var dialog = overlay.querySelector('.watch-dialog');
-        var startX = 0, startY = 0, baseX = 0, baseY = 0;
-        var origLeft = 0, origTop = 0, dlgW = 0;
-
-        function onMove(e) {
-            var x = baseX + (e.clientX - startX), y = baseY + (e.clientY - startY);
-            x = Math.max(Math.min(x, window.innerWidth - origLeft - 120), -(origLeft + dlgW - 120));
-            y = Math.max(Math.min(y, window.innerHeight - origTop - 48), -origTop);
-            dialog.style.transform = 'translate(' + x + 'px,' + y + 'px)';
-        }
-        function onUp() {
-            handle.classList.remove('dragging');
-            var m = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(dialog.style.transform || '');
-            if (m) { baseX = parseFloat(m[1]); baseY = parseFloat(m[2]); }
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('mouseup', onUp);
-        }
-        handle.addEventListener('mousedown', function(e) {
-            if (e.target.closest('button')) return;
-            e.preventDefault();
-            startX = e.clientX; startY = e.clientY;
-            var r = dialog.getBoundingClientRect();
-            origLeft = r.left - baseX; origTop = r.top - baseY; dlgW = r.width;
-            handle.classList.add('dragging');
-            document.addEventListener('mousemove', onMove);
-            document.addEventListener('mouseup', onUp);
-        });
-    }
-
-    window.openWatchModal = function() {
-        if (!overlay) buildModal();
+    // Called by switchTab() when the Watch tab becomes active. Builds the
+    // page on first visit, then (re)connects the status stream.
+    window.watchPageActivate = function() {
+        if (!pageBuilt) buildWatchPage();
+        if (!pageBuilt) return; // panel missing from the DOM
         var sel = currentSelection();
         document.getElementById('watch-title-sub').textContent =
             sel.context && sel.namespace ? sel.context + ' / ' + sel.namespace : '';
         document.getElementById('watch-buf-input').value = getWatchBufLines();
-        overlay.classList.add('active');
         fetchWatchStatus();
         connectStatusSSE();
     };
 
-    function closeWatchModal() {
-        if (!overlay) return;
-        overlay.classList.remove('active');
-        document.getElementById('watch-settings').classList.remove('active');
+    // Called by switchTab() when leaving the Watch tab. Only the status SSE
+    // is dropped; tee frames keep their log streams so they're intact when
+    // the user comes back. Background capture is server-owned regardless.
+    window.watchPageDeactivate = function() {
+        if (!pageBuilt) return;
+        var pop = document.getElementById('watch-settings');
+        if (pop) pop.classList.remove('active');
         disconnectStatusSSE();
-        // Tee frames are foreground-only; background capture continues.
-        for (var key in frames) removeFrame(frames[key], true);
-        frames = {};
-        renderFramesVisibility();
-    }
+    };
 
     function toggleSettings() {
         var pop = document.getElementById('watch-settings');
