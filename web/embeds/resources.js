@@ -1186,19 +1186,26 @@
         invalidRegex: false
     };
 
-    function buildSearchRegex() {
-        if (!searchState.query) return null;
-        var flags = searchState.caseSensitive ? 'g' : 'gi';
+    // Generic regex builder (also used by watch.js frame search). Returns
+    // null for an empty query, false for an invalid regex.
+    function buildLogSearchRegex(query, caseSensitive, wholeWord, isRegex) {
+        if (!query) return null;
+        var flags = caseSensitive ? 'g' : 'gi';
         try {
-            if (searchState.regex) {
-                return new RegExp(searchState.query, flags);
+            if (isRegex) {
+                return new RegExp(query, flags);
             }
-            var pat = searchState.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            if (searchState.wholeWord) pat = '\\b' + pat + '\\b';
+            var pat = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            if (wholeWord) pat = '\\b' + pat + '\\b';
             return new RegExp(pat, flags);
         } catch (e) {
             return false; // signal invalid regex
         }
+    }
+
+    function buildSearchRegex() {
+        return buildLogSearchRegex(searchState.query, searchState.caseSensitive,
+            searchState.wholeWord, searchState.regex);
     }
 
     function clearSearchMarks(root) {
@@ -1367,6 +1374,14 @@
             window.toggleLogSearch();
         }
     }
+
+    // Shared with watch.js so console frames get the same in-log search.
+    window.kroLogSearch = {
+        buildRegex: buildLogSearchRegex,
+        clearMarks: clearSearchMarks,
+        highlightIn: highlightMatchesIn,
+        lineHidden: lineSpanHidden
+    };
 
     function openModal(title, content, opts) {
         var overlay = document.getElementById('resource-modal-overlay');

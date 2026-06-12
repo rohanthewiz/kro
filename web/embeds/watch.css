@@ -87,6 +87,20 @@
     font-size: 12.5px;
 }
 .watch-settings-pop.active { display: block; }
+
+.watch-settings-close {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    background: none;
+    border: none;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    color: #636e72;
+    padding: 1px 4px;
+}
+.watch-settings-close:hover { color: #c0392b; }
 .watch-settings-pop label { display: block; margin-bottom: 6px; color: #2d3436; }
 .watch-settings-pop input[type="number"] {
     width: 110px;
@@ -129,10 +143,29 @@
 
 .watch-count { font-size: 12px; color: #636e72; }
 
-/* Max-streams slider (value is the server-side cap on active streams) */
-.watch-slider-wrap { display: flex; align-items: center; gap: 6px; }
-.watch-slider { width: 120px; accent-color: #0984e3; cursor: pointer; }
-.watch-slider-val { font-size: 12px; color: #636e72; min-width: 2ch; text-align: right; }
+/* Max-streams stepper (value is the server-side cap on active streams):
+   the number with small up/down arrows stacked beside it. */
+.watch-stepper { display: inline-flex; align-items: center; gap: 4px; }
+.watch-stepper-val {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #2d3436;
+    min-width: 2ch;
+    text-align: right;
+}
+.watch-stepper-btns { display: flex; flex-direction: column; gap: 2px; }
+.watch-stepper-btns button {
+    background: none;
+    border: 1px solid #b2bec3;
+    border-radius: 3px;
+    font-size: 7px;
+    line-height: 1;
+    padding: 2px 5px;
+    cursor: pointer;
+    color: #636e72;
+}
+.watch-stepper-btns button:hover { color: #0984e3; border-color: #0984e3; }
+.watch-stepper-btns button:active { background: rgba(9, 132, 227, 0.12); }
 
 .watch-notice {
     font-size: 12px;
@@ -154,6 +187,10 @@
 .watch-btn.primary:hover { background: #0b6fc2; color: #fff; }
 .watch-btn.danger:hover { border-color: #c0392b; color: #c0392b; }
 .watch-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* Toolbar Stop Watch: solid red, same shade as the "Ftl" level button. */
+.watch-btn.stop { background: #7b241c; border-color: #7b241c; color: #fff; }
+.watch-btn.stop:hover:not(:disabled) { background: #922b21; border-color: #922b21; color: #fff; }
 
 /* Stream list. Default height caps at 38%; dragging the splitter below sets
    an explicit height instead (watch.js). */
@@ -185,17 +222,6 @@
 body.watch-resizing { cursor: row-resize; user-select: none; }
 
 .watch-empty { color: #636e72; font-size: 13px; padding: 14px 8px; }
-
-.watch-session-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 7px 6px 5px;
-    font-size: 12.5px;
-    font-weight: 600;
-    color: #2d3436;
-}
-.watch-session-head .watch-btn { margin-left: auto; }
 
 .watch-row {
     display: flex;
@@ -326,7 +352,8 @@ body.watch-resizing { cursor: row-resize; user-select: none; }
 }
 .watch-frame-close:hover { color: #c0392b; }
 
-.watch-frame-copy {
+.watch-frame-copy,
+.watch-frame-search {
     background: none;
     border: none;
     display: inline-flex;
@@ -338,9 +365,15 @@ body.watch-resizing { cursor: row-resize; user-select: none; }
     padding: 2px 4px;
     flex: none;
 }
-.watch-frame-copy:hover { color: #0984e3; }
+.watch-frame-copy:hover,
+.watch-frame-search:hover { color: #0984e3; }
 .watch-frame-copy.copied { color: #00b894; }
 .watch-frame-copy.copy-failed { color: #c0392b; }
+.watch-frame-search.on { color: #0984e3; }
+
+/* Per-frame search bar reuses the modal's .modal-search-* styling, with
+   tighter padding to fit the slimmer frame chrome. */
+.watch-frame .modal-search-bar { padding: 4px 10px; }
 
 .watch-frame-body {
     flex: 1 1 auto;
@@ -366,7 +399,9 @@ body.dark .watch-page.fullscreen,
 body.dark .watch-lower.fullscreen { background: #1e272e; }
 body.dark .watch-splitter::before { background: #4a5568; }
 body.dark .watch-splitter:hover::before { background: #54a0ff; }
-body.dark .watch-slider-val { color: #8395a7; }
+body.dark .watch-stepper-val { color: #dfe6e9; }
+body.dark .watch-stepper-btns button { border-color: #636e72; color: #b2bec3; }
+body.dark .watch-stepper-btns button:hover { color: #54a0ff; border-color: #54a0ff; }
 body.dark .watch-page-head { border-color: #4a5568; }
 body.dark .watch-page-title { color: #e0e0e0; }
 body.dark .watch-title-sub,
@@ -379,6 +414,8 @@ body.dark .watch-settings-pop {
     color: #e0e0e0;
 }
 body.dark .watch-settings-pop label { color: #e0e0e0; }
+body.dark .watch-settings-close { color: #b2bec3; }
+body.dark .watch-settings-close:hover { color: #ff8a8a; }
 body.dark .watch-settings-pop input[type="number"] {
     background: #1e272e;
     border-color: #636e72;
@@ -387,8 +424,11 @@ body.dark .watch-settings-pop input[type="number"] {
 body.dark .watch-settings-sep { border-color: #4a5568; }
 body.dark .watch-log-usage,
 body.dark .watch-settings-hint { color: #8395a7; }
-body.dark .watch-frame-copy { color: #8395a7; }
-body.dark .watch-frame-copy:hover { color: #54a0ff; }
+body.dark .watch-frame-copy,
+body.dark .watch-frame-search { color: #8395a7; }
+body.dark .watch-frame-copy:hover,
+body.dark .watch-frame-search:hover,
+body.dark .watch-frame-search.on { color: #54a0ff; }
 body.dark .watch-frame-copy.copied { color: #00b894; }
 body.dark .watch-controls,
 body.dark .watch-stream-list { border-color: #4a5568; }
@@ -399,8 +439,9 @@ body.dark .watch-btn {
 }
 body.dark .watch-btn:hover { border-color: #54a0ff; color: #54a0ff; }
 body.dark .watch-btn.primary { background: #0984e3; border-color: #0984e3; color: #fff; }
+body.dark .watch-btn.stop { background: #7b241c; border-color: #7b241c; color: #fff; }
+body.dark .watch-btn.stop:hover:not(:disabled) { background: #922b21; border-color: #922b21; color: #fff; }
 body.dark .watch-row:hover { background: rgba(84, 160, 255, 0.10); }
-body.dark .watch-session-head { color: #e0e0e0; }
 body.dark .watch-frame {
     border-color: #4a5568;
     background: rgba(30, 39, 46, 0.7);

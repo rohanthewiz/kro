@@ -2,8 +2,8 @@
 // selected namespace that auto-streams logs of newly created pods to files in
 // the background, lists those streams with per-stream controls (tee to
 // console, export/download, pause/resume, stop), and shows teed streams in a
-// grid of console frames (up to a configurable count), each with a
-// copy-to-clipboard button. Teeing an already-ended stream replays the last
+// grid of console frames (up to a configurable count), each with in-log
+// search and a copy-to-clipboard button. Teeing an already-ended stream replays the last
 // <console buffer> lines of its file. Background streams are server-owned:
 // leaving this tab or reloading the page never interrupts capture; returning
 // rebuilds the list from /api/watch/status. Tee frames are client-local:
@@ -20,7 +20,7 @@
     var WATCH_FRAMES_KEY = 'kro_watch_max_frames';
     var WATCH_FRAMES_MIN = 1, WATCH_FRAMES_MAX = 12, WATCH_FRAMES_DEFAULT = 4;
 
-    // Upper bound of the stream-count slider (the slider's own value is the
+    // Upper bound of the max-streams stepper (the stepper's own value is the
     // server-side cap, so it isn't stored here).
     var WATCH_SLIDER_MAX_KEY = 'kro_watch_slider_max';
     var WATCH_SLIDER_MAX_MIN = 5, WATCH_SLIDER_MAX_MAX = 100, WATCH_SLIDER_MAX_DEFAULT = 30;
@@ -71,6 +71,23 @@
     var lastStatus = null;    // last /api/watch/status payload
     var frames = {};          // frameKey -> {key, ctx, ns, pod, el, body, status, es, buf, scheduled}
     var noticeTimer = null;
+    var maxPostTimer = null;  // debounce for max-streams stepper posts
+
+    // Max-streams stepper: arrows step the shown value immediately; the
+    // server post is debounced so a burst of clicks lands as one update.
+    function bumpMaxStreams(delta) {
+        var valEl = document.getElementById('watch-max-val');
+        var v = Math.max(1, Math.min(getSliderMax(),
+            (parseInt(valEl.textContent, 10) || 1) + delta));
+        valEl.textContent = v;
+        if (maxPostTimer) clearTimeout(maxPostTimer);
+        maxPostTimer = setTimeout(function() {
+            maxPostTimer = null;
+            postJSON('/api/watch/maxstreams', { max: v })
+                .then(fetchWatchStatus)
+                .catch(function(err) { showNotice(err.message); });
+        }, 350);
+    }
 
     // Copy-to-clipboard icon: two overlapping rectangles.
     var COPY_SVG =
@@ -78,6 +95,13 @@
         ' stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
         '<rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/>' +
         '<path d="M10.5 2.5h-7a1 1 0 0 0-1 1v7"/></svg>';
+
+    // Magnifier icon for the per-frame log search toggle.
+    var SEARCH_SVG =
+        '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor"' +
+        ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<circle cx="7" cy="7" r="5"/>' +
+        '<line x1="11" y1="11" x2="14.5" y2="14.5"/></svg>';
 
     function esc(s) {
         return String(s == null ? '' : s)
@@ -120,6 +144,7 @@
                     '<button type="button" class="watch-gear" id="watch-gear" title="Watch settings">⚙</button>' +
                 '</div>' +
                 '<div class="watch-settings-pop" id="watch-settings">' +
+                    '<button type="button" class="watch-settings-close" id="watch-settings-close" title="Close">×</button>' +
                     '<label for="watch-buf-input">Console buffer (lines per frame)</label>' +
                     '<input type="number" id="watch-buf-input" min="' + WATCH_BUF_MIN + '" max="' + WATCH_BUF_MAX + '" step="100">' +
                     '<div class="watch-settings-hint">' + WATCH_BUF_MIN + '–' + WATCH_BUF_MAX +
@@ -128,10 +153,10 @@
                     '<input type="number" id="watch-frames-input" min="' + WATCH_FRAMES_MIN + '" max="' + WATCH_FRAMES_MAX + '" step="1">' +
                     '<div class="watch-settings-hint">' + WATCH_FRAMES_MIN + '–' + WATCH_FRAMES_MAX +
                         ' teed streams shown at once below the list.</div>' +
-                    '<label for="watch-slider-max" style="margin-top:10px">Stream slider maximum</label>' +
+                    '<label for="watch-slider-max" style="margin-top:10px">Max streams upper limit</label>' +
                     '<input type="number" id="watch-slider-max" min="' + WATCH_SLIDER_MAX_MIN + '" max="' + WATCH_SLIDER_MAX_MAX + '" step="1">' +
                     '<div class="watch-settings-hint">' + WATCH_SLIDER_MAX_MIN + '–' + WATCH_SLIDER_MAX_MAX +
-                        '. Upper bound of the max-streams slider.</div>' +
+                        '. Upper bound of the max-streams stepper.</div>' +
                     '<div class="watch-settings-sep"></div>' +
                     '<div class="watch-log-usage" id="watch-log-usage">log folder: …</div>' +
                     '<label for="watch-clean-days">Delete log files older than (days)</label>' +
@@ -144,13 +169,17 @@
                 '</div>' +
                 '<div class="watch-controls">' +
                     '<button type="button" class="watch-btn primary" id="watch-start">▶ Start Watch</button>' +
-                    '<button type="button" class="watch-btn" id="watch-clear" title="Remove ended streams from the list (log files are kept)">✕ Clear Streams</button>' +
-                    '<span class="watch-slider-wrap" title="Max concurrent streams">' +
-                        '<input type="range" class="watch-slider" id="watch-max-slider" min="1" max="' + getSliderMax() + '" step="1">' +
-                        '<span class="watch-slider-val" id="watch-max-val"></span>' +
-                    '</span>' +
-                    '<span class="watch-count" id="watch-count"></span>' +
+                    '<button type="button" class="watch-btn stop" id="watch-stop" disabled>■ Stop Watch</button>' +
                     '<span class="watch-notice" id="watch-notice"></span>' +
+                    '<span class="watch-count" id="watch-count"></span>' +
+                    '<span class="watch-stepper" title="Max concurrent streams">' +
+                        '<span class="watch-stepper-val" id="watch-max-val"></span>' +
+                        '<span class="watch-stepper-btns">' +
+                            '<button type="button" id="watch-max-up" title="Raise max concurrent streams">▲</button>' +
+                            '<button type="button" id="watch-max-down" title="Lower max concurrent streams">▼</button>' +
+                        '</span>' +
+                    '</span>' +
+                    '<button type="button" class="watch-btn" id="watch-clear" title="Remove ended streams from the list (log files are kept)">✕ Clear Streams</button>' +
                 '</div>' +
                 '<div class="watch-stream-list" id="watch-stream-list"></div>' +
                 '<div class="watch-splitter" id="watch-splitter" title="Drag to resize the stream list"></div>' +
@@ -164,8 +193,15 @@
         pageBuilt = true;
 
         document.getElementById('watch-start').addEventListener('click', watchStart);
+        document.getElementById('watch-stop').addEventListener('click', function() {
+            var sel = currentSelection();
+            watchStopSession(sel.context, sel.namespace);
+        });
         document.getElementById('watch-clear').addEventListener('click', clearStreams);
         document.getElementById('watch-gear').addEventListener('click', toggleSettings);
+        document.getElementById('watch-settings-close').addEventListener('click', function() {
+            document.getElementById('watch-settings').classList.remove('active');
+        });
         document.getElementById('watch-stream-list').addEventListener('click', onListClick);
         document.getElementById('watch-clean-btn').addEventListener('click', cleanupLogs);
 
@@ -180,22 +216,20 @@
             renderFramesVisibility();
         });
 
-        var slider = document.getElementById('watch-max-slider');
-        slider.addEventListener('input', function() {
-            document.getElementById('watch-max-val').textContent = slider.value;
+        document.getElementById('watch-max-up').addEventListener('click', function() {
+            bumpMaxStreams(1);
         });
-        slider.addEventListener('change', function() {
-            postJSON('/api/watch/maxstreams', { max: parseInt(slider.value, 10) })
-                .then(fetchWatchStatus)
-                .catch(function(err) { showNotice(err.message); });
+        document.getElementById('watch-max-down').addEventListener('click', function() {
+            bumpMaxStreams(-1);
         });
 
         var sliderMaxInput = document.getElementById('watch-slider-max');
         sliderMaxInput.addEventListener('change', function() {
             var v = setSliderMax(sliderMaxInput.value);
             sliderMaxInput.value = v;
-            slider.max = v;
-            // The range input clamps its own value; push a lowered cap to the server.
+            // Clamp the stepper display and push a lowered cap to the server.
+            var valEl = document.getElementById('watch-max-val');
+            if ((parseInt(valEl.textContent, 10) || 1) > v) valEl.textContent = v;
             if (lastStatus && lastStatus.maxStreams > v) {
                 postJSON('/api/watch/maxstreams', { max: v })
                     .then(fetchWatchStatus)
@@ -269,7 +303,6 @@
         document.getElementById('watch-buf-input').value = getWatchBufLines();
         document.getElementById('watch-frames-input').value = getMaxFrames();
         document.getElementById('watch-slider-max').value = getSliderMax();
-        document.getElementById('watch-max-slider').max = getSliderMax();
         fetchWatchStatus();
         connectStatusSSE();
     };
@@ -353,12 +386,10 @@
         document.getElementById('watch-count').textContent =
             lastStatus.activeStreams + ' / ' + lastStatus.maxStreams + ' streams';
 
-        // Sync the max-streams slider to the server's cap unless the user is
-        // mid-drag (the slider holds focus while being adjusted).
-        var slider = document.getElementById('watch-max-slider');
-        if (document.activeElement !== slider) {
-            slider.value = lastStatus.maxStreams;
-            document.getElementById('watch-max-val').textContent = slider.value;
+        // Sync the max-streams stepper to the server's cap unless a local
+        // change is still waiting on its debounced post.
+        if (!maxPostTimer) {
+            document.getElementById('watch-max-val').textContent = lastStatus.maxStreams;
         }
 
         // Start button: disabled when the current selection is already watched.
@@ -367,7 +398,15 @@
             return s.context === sel.context && s.namespace === sel.namespace;
         });
         startBtn.disabled = watchingCurrent;
+        startBtn.textContent = watchingCurrent ? '▶ Watching…' : '▶ Start Watch';
         startBtn.title = watchingCurrent ? 'Already watching ' + sel.context + ' / ' + sel.namespace : '';
+
+        // Stop button acts on the session for the current ctx/ns selection.
+        var stopBtn = document.getElementById('watch-stop');
+        stopBtn.disabled = !watchingCurrent;
+        stopBtn.title = watchingCurrent
+            ? 'Stop watching ' + sel.context + ' / ' + sel.namespace
+            : 'Not watching the selected namespace';
 
         var list = document.getElementById('watch-stream-list');
         if (!sessions.length) {
@@ -379,11 +418,6 @@
 
         var html = '';
         sessions.forEach(function(s) {
-            html += '<div class="watch-session-head">' +
-                '<span>' + esc(s.context) + ' / ' + esc(s.namespace) + '</span>' +
-                '<button type="button" class="watch-btn danger" data-act="stop-session" data-ctx="' +
-                    esc(s.context) + '" data-ns="' + esc(s.namespace) + '">■ Stop Watch</button>' +
-            '</div>';
             if (!s.streams || !s.streams.length) {
                 html += '<div class="watch-empty">Watching… no new pods yet. Existing pods are ignored by design.</div>';
                 return;
@@ -446,9 +480,7 @@
         var btn = e.target.closest('button[data-act]');
         if (!btn) return;
         var act = btn.dataset.act, ctx = btn.dataset.ctx, ns = btn.dataset.ns, pod = btn.dataset.pod;
-        if (act === 'stop-session') {
-            watchStopSession(ctx, ns);
-        } else if (act === 'tee') {
+        if (act === 'tee') {
             toggleTee(ctx, ns, pod);
         } else if (act === 'export') {
             exportLog(ctx, ns, pod);
@@ -585,8 +617,19 @@
                 '<span class="pod">' + esc(pod) + '</span>' +
                 '<span class="watch-frame-status">connecting…</span>' +
                 '<span class="log-lvl-btns"></span>' +
+                '<button type="button" class="watch-frame-search" title="Search logs (Esc to close)">' + SEARCH_SVG + '</button>' +
                 '<button type="button" class="watch-frame-copy" title="Copy buffer to clipboard">' + COPY_SVG + '</button>' +
                 '<button type="button" class="watch-frame-close" title="Close frame (capture continues)">×</button>' +
+            '</div>' +
+            '<div class="modal-search-bar watch-frame-search-bar">' +
+                '<input type="text" placeholder="Search logs…" autocomplete="off" spellcheck="false">' +
+                '<button type="button" class="modal-search-opt" data-opt="case" title="Match case">Aa</button>' +
+                '<button type="button" class="modal-search-opt" data-opt="word" title="Whole word"><u>W</u></button>' +
+                '<button type="button" class="modal-search-opt" data-opt="regex" title="Regular expression">.*</button>' +
+                '<span class="modal-search-count"></span>' +
+                '<button type="button" class="modal-search-nav" data-dir="-1" title="Previous match (Shift+Enter)">↑</button>' +
+                '<button type="button" class="modal-search-nav" data-dir="1" title="Next match (Enter)">↓</button>' +
+                '<button type="button" class="modal-search-close" title="Close (Esc)">&times;</button>' +
             '</div>' +
             '<pre class="watch-frame-body"></pre>';
         document.getElementById('watch-frames').appendChild(el);
@@ -610,8 +653,11 @@
             var hiddenLvls = LF.getHidden();
             lvlBtns.innerHTML = LF.buttonsHTML(hiddenLvls);
             LF.apply(frame.body, hiddenLvls);
-            LF.wire(lvlBtns, frame.body);
+            LF.wire(lvlBtns, frame.body, function() {
+                if (frame.search && frame.search.open && frame.search.query) runFrameSearch(frame);
+            });
         }
+        wireFrameSearch(frame);
         el.querySelector('.watch-frame-close').addEventListener('click', function() {
             removeFrame(frame, true);
             delete frames[key];
@@ -679,6 +725,138 @@
         }
     }
 
+    // ===== Per-frame log search =====
+    // Same find UX as the regular pod-log modal, but scoped to one console
+    // frame with its own state. Match/highlight helpers are shared from
+    // resources.js via window.kroLogSearch.
+    function wireFrameSearch(frame) {
+        var LS = window.kroLogSearch;
+        if (!LS) return; // resources.js helpers missing; button stays inert
+        frame.search = {
+            open: false, query: '', caseSensitive: false, wholeWord: false,
+            regex: false, matchCount: 0, currentIndex: 0, invalid: false
+        };
+        var el = frame.el;
+        frame.searchBtn = el.querySelector('.watch-frame-search');
+        frame.searchBar = el.querySelector('.watch-frame-search-bar');
+        frame.searchInput = frame.searchBar.querySelector('input');
+        frame.searchCount = frame.searchBar.querySelector('.modal-search-count');
+
+        frame.searchBtn.addEventListener('click', function() { toggleFrameSearch(frame); });
+        frame.searchBar.querySelector('.modal-search-close').addEventListener('click', function() {
+            toggleFrameSearch(frame);
+        });
+        frame.searchInput.addEventListener('input', function() {
+            frame.search.query = frame.searchInput.value || '';
+            runFrameSearch(frame);
+        });
+        frame.searchInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                navigateFrameMatch(frame, e.shiftKey ? -1 : 1);
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation(); // keep Esc from also exiting full screen
+                toggleFrameSearch(frame);
+            }
+        });
+        var opts = frame.searchBar.querySelectorAll('.modal-search-opt');
+        for (var i = 0; i < opts.length; i++) {
+            opts[i].addEventListener('click', function() {
+                var key = this.dataset.opt === 'case' ? 'caseSensitive'
+                    : this.dataset.opt === 'word' ? 'wholeWord' : 'regex';
+                frame.search[key] = !frame.search[key];
+                this.classList.toggle('on', frame.search[key]);
+                runFrameSearch(frame);
+            });
+        }
+        var navs = frame.searchBar.querySelectorAll('.modal-search-nav');
+        for (var j = 0; j < navs.length; j++) {
+            navs[j].addEventListener('click', function() {
+                navigateFrameMatch(frame, parseInt(this.dataset.dir, 10));
+            });
+        }
+    }
+
+    function toggleFrameSearch(frame) {
+        if (!frame.search) return;
+        frame.search.open = !frame.search.open;
+        frame.searchBar.classList.toggle('active', frame.search.open);
+        frame.searchBtn.classList.toggle('on', frame.search.open);
+        if (frame.search.open) {
+            frame.searchInput.focus();
+            frame.searchInput.select();
+            runFrameSearch(frame);
+        } else {
+            window.kroLogSearch.clearMarks(frame.body);
+        }
+    }
+
+    function frameSearchRegex(frame) {
+        return window.kroLogSearch.buildRegex(frame.search.query,
+            frame.search.caseSensitive, frame.search.wholeWord, frame.search.regex);
+    }
+
+    function refreshFrameSearchCount(frame) {
+        var el = frame.searchCount;
+        if (frame.search.invalid) {
+            el.textContent = 'invalid regex';
+            el.classList.add('error');
+            return;
+        }
+        el.classList.remove('error');
+        if (!frame.search.query) { el.textContent = ''; return; }
+        if (frame.search.matchCount === 0) { el.textContent = 'no matches'; return; }
+        var idx = Math.min(frame.search.currentIndex, frame.search.matchCount - 1);
+        el.textContent = (idx + 1) + ' / ' + frame.search.matchCount;
+    }
+
+    function runFrameSearch(frame) {
+        var LS = window.kroLogSearch;
+        LS.clearMarks(frame.body);
+        frame.search.invalid = false;
+        frame.search.matchCount = 0;
+        frame.search.currentIndex = 0;
+        if (!frame.search.query) { refreshFrameSearchCount(frame); return; }
+        var rx = frameSearchRegex(frame);
+        if (rx === false) {
+            frame.search.invalid = true;
+            refreshFrameSearchCount(frame);
+            return;
+        }
+        // Line by line so lines hidden by the level filter get no marks —
+        // keeps the count honest and navigation on visible matches.
+        var total = 0;
+        var lines = frame.body.children;
+        for (var i = 0; i < lines.length; i++) {
+            if (LS.lineHidden(lines[i], frame.body)) continue;
+            total += LS.highlightIn(lines[i], rx);
+        }
+        frame.search.matchCount = total;
+        refreshFrameSearchCount(frame);
+        if (total > 0) navigateFrameMatch(frame, 0);
+    }
+
+    function navigateFrameMatch(frame, delta) {
+        var marks = frame.body.querySelectorAll('mark.log-match');
+        if (!marks.length) return;
+        var cur = -1;
+        for (var i = 0; i < marks.length; i++) {
+            if (marks[i].classList.contains('current')) { cur = i; break; }
+        }
+        var next;
+        if (cur === -1) {
+            next = delta >= 0 ? 0 : marks.length - 1;
+        } else {
+            next = ((cur + delta) % marks.length + marks.length) % marks.length;
+            marks[cur].classList.remove('current');
+        }
+        marks[next].classList.add('current');
+        marks[next].scrollIntoView({ block: 'center', behavior: 'smooth' });
+        frame.search.currentIndex = next;
+        refreshFrameSearchCount(frame);
+    }
+
     function removeFrame(frame, detach) {
         if (frame.es) { frame.es.close(); frame.es = null; }
         frame.buf = [];
@@ -721,6 +899,7 @@
         var atBottom = (body.scrollHeight - body.scrollTop - body.clientHeight) < 30;
 
         var frag = document.createDocumentFragment();
+        var newSpans = [];
         for (var i = 0; i < buf.length; i++) {
             var span = document.createElement('span');
             if (buf[i].charCodeAt(0) === 0) {
@@ -738,9 +917,27 @@
                 span.textContent = buf[i] + '\n';
             }
             frag.appendChild(span);
+            newSpans.push(span);
         }
         body.appendChild(frag);
         trimFrame(frame);
+
+        // Keep an active search in step with streamed lines: mark matches in
+        // the new spans, then recount from the DOM (trimming may also have
+        // dropped marked lines, so an incremental count would drift).
+        if (frame.search && frame.search.open && frame.search.query && !frame.search.invalid) {
+            var LS = window.kroLogSearch;
+            var rx = frameSearchRegex(frame);
+            if (rx) {
+                for (var j = 0; j < newSpans.length; j++) {
+                    if (!newSpans[j].parentNode) continue; // already trimmed
+                    if (LS.lineHidden(newSpans[j], body)) continue;
+                    LS.highlightIn(newSpans[j], rx);
+                }
+                frame.search.matchCount = body.querySelectorAll('mark.log-match').length;
+                refreshFrameSearchCount(frame);
+            }
+        }
         if (atBottom) body.scrollTop = body.scrollHeight;
     }
 
