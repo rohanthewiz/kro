@@ -1,5 +1,5 @@
-/* Pod Watch page (the "Watch" tab): stream list on top, up to four teed
-   console frames below in up to a 2x2 grid. watch.js builds the markup into
+/* Pod Watch page (the "Watch" tab): stream list on top, a draggable splitter,
+   then teed console frames below in a grid. watch.js builds the markup into
    #watch-page on first activation; everything is namespaced .watch-*. */
 
 .watch-page {
@@ -14,6 +14,20 @@
     border-radius: 12px;
     overflow: hidden;
 }
+
+/* Full-screen modes (toggled by the ⛶ buttons; Esc exits): the page or just
+   the lower logs section lifts out of the layout and fills the viewport. */
+.watch-page.fullscreen,
+.watch-lower.fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    height: 100vh;
+    min-height: 0;
+    border-radius: 0;
+    background: #fff;
+}
+.watch-lower.fullscreen { z-index: 1001; }
 
 .watch-page-head {
     display: flex;
@@ -115,6 +129,11 @@
 
 .watch-count { font-size: 12px; color: #636e72; }
 
+/* Max-streams slider (value is the server-side cap on active streams) */
+.watch-slider-wrap { display: flex; align-items: center; gap: 6px; }
+.watch-slider { width: 120px; accent-color: #0984e3; cursor: pointer; }
+.watch-slider-val { font-size: 12px; color: #636e72; min-width: 2ch; text-align: right; }
+
 .watch-notice {
     font-size: 12px;
     color: #b6701a;
@@ -136,7 +155,8 @@
 .watch-btn.danger:hover { border-color: #c0392b; color: #c0392b; }
 .watch-btn:disabled { opacity: 0.5; cursor: default; }
 
-/* Stream list */
+/* Stream list. Default height caps at 38%; dragging the splitter below sets
+   an explicit height instead (watch.js). */
 .watch-stream-list {
     flex: none;
     max-height: 38%;
@@ -144,6 +164,25 @@
     padding: 6px 10px;
     border-bottom: 1px solid #e0e0e0;
 }
+
+/* Splitter between the stream list and the console frames */
+.watch-splitter {
+    flex: none;
+    height: 8px;
+    cursor: row-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.watch-splitter::before {
+    content: '';
+    width: 44px;
+    height: 3px;
+    border-radius: 2px;
+    background: #cbd5db;
+}
+.watch-splitter:hover::before { background: #0984e3; }
+body.watch-resizing { cursor: row-resize; user-select: none; }
 
 .watch-empty { color: #636e72; font-size: 13px; padding: 14px 8px; }
 
@@ -208,9 +247,26 @@
 
 @keyframes watch-pulse { 50% { opacity: 0.55; } }
 
-/* Console frames: count-N (set by watch.js) drives the layout — one frame
-   fills the area, two sit side-by-side, three put the last frame across the
-   bottom row, four form a 2x2 grid. */
+/* Lower section: a slim header bar (logs full-screen toggle) above the
+   console frames grid / placeholder. */
+.watch-lower {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.watch-lower-head {
+    flex: none;
+    display: flex;
+    justify-content: flex-end;
+    padding: 2px 8px 0;
+}
+.watch-lower-head .watch-gear { font-size: 13px; padding: 2px 6px; }
+
+/* Console frames: watch.js sets grid-template-columns by frame count (one
+   frame full-width, 2-4 in two columns, 5+ in three) and span-last when the
+   last row would otherwise hold a lone frame. */
 .watch-frames {
     flex: 1 1 auto;
     display: grid;
@@ -220,10 +276,7 @@
     padding: 8px;
     min-height: 0;
 }
-.watch-frames.count-2,
-.watch-frames.count-3,
-.watch-frames.count-4 { grid-template-columns: 1fr 1fr; }
-.watch-frames.count-3 .watch-frame:last-child { grid-column: 1 / -1; }
+.watch-frames.span-last .watch-frame:last-child { grid-column: 1 / -1; }
 .watch-frames.empty { display: none; }
 
 .watch-frames-placeholder {
@@ -309,6 +362,11 @@ body.dark .watch-page {
     border-color: #4a5568;
     border-top-color: #0984e3;
 }
+body.dark .watch-page.fullscreen,
+body.dark .watch-lower.fullscreen { background: #1e272e; }
+body.dark .watch-splitter::before { background: #4a5568; }
+body.dark .watch-splitter:hover::before { background: #54a0ff; }
+body.dark .watch-slider-val { color: #8395a7; }
 body.dark .watch-page-head { border-color: #4a5568; }
 body.dark .watch-page-title { color: #e0e0e0; }
 body.dark .watch-title-sub,

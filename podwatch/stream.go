@@ -22,11 +22,11 @@ func (m *Manager) startStream(sess *Session, podName string) {
 		m.mu.Unlock()
 		return
 	}
-	if m.activeStreamCountLocked() >= maxWatchStreams {
+	if m.activeStreamCountLocked() >= m.maxStreamsNow() {
 		m.mu.Unlock()
 		m.notifyEvent("limit_reached", map[string]any{
 			"context": sess.Context, "namespace": sess.Namespace,
-			"pod": podName, "max": maxWatchStreams,
+			"pod": podName, "max": m.maxStreamsNow(),
 		})
 		return
 	}

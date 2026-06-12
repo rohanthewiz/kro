@@ -76,8 +76,8 @@ func summaryCard(b *element.Builder, cls, label, valueID string) any {
 // reads the same config to populate them).
 //
 // Panel composition:
-//   watch       — Pod Watch page (markup built by watch.js on first visit)
 //   workloads   — Terminal, Jobs, All Pods (+ Pods orphan if any); shown as "Pods"
+//   watch       — Pod Watch page (markup built by watch.js on first visit)
 //   deployments — Deployments & ReplicaSets, All Pods
 //   networking  — Services, Ingresses
 //   sets        — StatefulSets, DaemonSets
@@ -88,8 +88,8 @@ func tabLayout(b *element.Builder) any {
 	tabs := []struct {
 		id, label, sub, icon string
 	}{
-		{"watch", "Watch", "Pod log capture", "W"},
 		{"workloads", "Pods", "Terminal · Jobs · Pods", "P"},
+		{"watch", "Watch", "Pod log capture", "W"},
 		{"deployments", "Deployments", "Deployments · Pods", "D"},
 		{"networking", "Networking", "Services · Ingresses", "N"},
 		{"sets", "Sets", "StatefulSets · DaemonSets", "S"},
@@ -135,17 +135,17 @@ func tabLayout(b *element.Builder) any {
 			}),
 		),
 		b.DivClass("tab-content").R(
-			// Watch — Pod Watch page; watch.js builds the UI into #watch-page
-			// the first time the tab is activated.
-			b.Div("class", "tab-panel", "role", "tabpanel", "id", "tab-panel-watch", "data-tab-panel", "watch", "aria-labelledby", "tab-btn-watch").R(
-				b.Div("class", "watch-page", "id", "watch-page").R(),
-			),
 			// Pods / workloads (active by default)
 			b.Div("class", "tab-panel active", "role", "tabpanel", "id", "tab-panel-workloads", "data-tab-panel", "workloads", "aria-labelledby", "tab-btn-workloads").R(
 				terminalSection(b),
 				b.Div("class", "tab-sections", "id", "tab-sections-workloads").R(
 					b.DivClass("loading").T("Loading resources"),
 				),
+			),
+			// Watch — Pod Watch page; watch.js builds the UI into #watch-page
+			// the first time the tab is activated.
+			b.Div("class", "tab-panel", "role", "tabpanel", "id", "tab-panel-watch", "data-tab-panel", "watch", "aria-labelledby", "tab-btn-watch").R(
+				b.Div("class", "watch-page", "id", "watch-page").R(),
 			),
 			b.Div("class", "tab-panel", "role", "tabpanel", "id", "tab-panel-deployments", "data-tab-panel", "deployments", "aria-labelledby", "tab-btn-deployments").R(
 				b.Div("class", "tab-sections", "id", "tab-sections-deployments").R(),

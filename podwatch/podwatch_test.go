@@ -133,7 +133,7 @@ func TestActiveStreamCountAndCap(t *testing.T) {
 
 	// Fill to the cap with running streams; the next startStream must be
 	// rejected with a limit_reached notification and no new entry.
-	for i := len(states); m.Status().ActiveStreams < maxWatchStreams; i++ {
+	for i := len(states); m.Status().ActiveStreams < m.maxStreamsNow(); i++ {
 		sess.streams[fmt.Sprintf("p%d", i)] = &Stream{Pod: fmt.Sprintf("p%d", i), state: StateRunning}
 	}
 	var limited string

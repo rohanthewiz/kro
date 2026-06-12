@@ -94,6 +94,30 @@ func (h *handlers) WatchStreamAction(c rweb.Context) error {
 	return c.WriteJSON(map[string]string{"status": body.Action})
 }
 
+// WatchSetMax sets the cap on concurrently active streams (the UI slider).
+// Body: {"max": N}. The manager clamps to its allowed range and returns the
+// applied value.
+func (h *handlers) WatchSetMax(c rweb.Context) error {
+	var body struct {
+		Max *int `json:"max"`
+	}
+	if err := json.NewDecoder(bytes.NewReader(c.Request().Body())).Decode(&body); err != nil {
+		return writeJSONErr(c, http.StatusBadRequest, serr.Wrap(err, "invalid JSON"))
+	}
+	if body.Max == nil || *body.Max < 1 {
+		return writeJSONErr(c, http.StatusBadRequest, serr.New("max (>= 1) is required"))
+	}
+	applied := h.mgr.SetMaxStreams(*body.Max)
+	logger.InfoF("pod watch max streams set to %d", applied)
+	return c.WriteJSON(map[string]int{"max": applied})
+}
+
+// WatchClear removes every ended (terminal) stream from every session's
+// list. Log files are kept.
+func (h *handlers) WatchClear(c rweb.Context) error {
+	return c.WriteJSON(map[string]int{"removed": h.mgr.ClearTerminal()})
+}
+
 // WatchExport serves one stream's log file as a text download, flushing the
 // stream's write buffer first so the file is current.
 // GET /api/watch/export?context=..&namespace=..&pod=..

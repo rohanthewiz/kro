@@ -21,9 +21,11 @@ import (
 )
 
 const (
-	// maxWatchStreams caps concurrently active (starting|running|paused)
-	// log streams across all watch sessions.
-	maxWatchStreams = 12
+	// The cap on concurrently active (starting|running|paused) log streams
+	// across all watch sessions is runtime-settable via SetMaxStreams
+	// (driven by the UI slider); these bound it.
+	defaultMaxStreams = 10
+	absMaxStreams     = 100
 
 	ringLines      = 2000 // per-stream replay buffer for console tees
 	subChanSize    = 256  // per-tee subscriber channel buffer
@@ -67,6 +69,8 @@ type Manager struct {
 	logDir    string
 	clientFn  func(ctxName string) (*kubernetes.Clientset, error)
 	retention time.Duration // auto-clean age; written once by StartJanitor before serving
+
+	maxStreams atomic.Int64 // cap on active streams; see SetMaxStreams
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -136,11 +140,48 @@ type StatusPayload struct {
 }
 
 func NewManager(clientFn func(string) (*kubernetes.Clientset, error), logDir string) *Manager {
-	return &Manager{
+	m := &Manager{
 		logDir:   logDir,
 		clientFn: clientFn,
 		sessions: map[string]*Session{},
 	}
+	m.maxStreams.Store(defaultMaxStreams)
+	return m
+}
+
+// SetMaxStreams sets the cap on concurrently active streams, clamped to
+// [1, absMaxStreams]. Lowering it below the current active count only blocks
+// new streams; existing ones are unaffected. Returns the applied value.
+func (m *Manager) SetMaxStreams(n int) int {
+	n = max(1, min(n, absMaxStreams))
+	m.maxStreams.Store(int64(n))
+	m.notifyEvent("max_streams", map[string]any{"max": n})
+	return n
+}
+
+func (m *Manager) maxStreamsNow() int { return int(m.maxStreams.Load()) }
+
+// ClearTerminal removes every terminal (completed|stopped|error) stream from
+// every session's list. Log files are kept. Returns how many were removed.
+func (m *Manager) ClearTerminal() int {
+	m.mu.Lock()
+	n := 0
+	for _, sess := range m.sessions {
+		for pod, st := range sess.streams {
+			st.mu.Lock()
+			terminal := st.state.terminal()
+			st.mu.Unlock()
+			if terminal {
+				delete(sess.streams, pod)
+				n++
+			}
+		}
+	}
+	m.mu.Unlock()
+	if n > 0 {
+		m.notifyEvent("streams_cleared", map[string]any{"removed": n})
+	}
+	return n
 }
 
 // SetNotify wires status events to the web layer's SSE hub.
@@ -254,7 +295,7 @@ func (m *Manager) Status() StatusPayload {
 		return sessions[i].Namespace < sessions[j].Namespace
 	})
 
-	out := StatusPayload{MaxStreams: maxWatchStreams, ActiveStreams: active, Sessions: []SessionStatus{}}
+	out := StatusPayload{MaxStreams: m.maxStreamsNow(), ActiveStreams: active, Sessions: []SessionStatus{}}
 	for _, s := range sessions {
 		out.Sessions = append(out.Sessions, m.sessionStatus(s))
 	}

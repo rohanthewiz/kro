@@ -1,8 +1,8 @@
 // Pod Watch page (the "Watch" tab): starts a server-side watch of the
 // selected namespace that auto-streams logs of newly created pods to files in
 // the background, lists those streams with per-stream controls (tee to
-// console, export/download, pause/resume, stop), and shows up to four teed
-// streams in up to a 2x2 grid of console frames, each with a
+// console, export/download, pause/resume, stop), and shows teed streams in a
+// grid of console frames (up to a configurable count), each with a
 // copy-to-clipboard button. Teeing an already-ended stream replays the last
 // <console buffer> lines of its file. Background streams are server-owned:
 // leaving this tab or reloading the page never interrupts capture; returning
@@ -12,22 +12,56 @@
 (function() {
     'use strict';
 
-    var MAX_TEE_FRAMES = 4;
-
-    // ===== Console frame buffer setting (gear popover) =====
+    // ===== Settings (gear popover; persisted in localStorage) =====
     var WATCH_BUF_KEY = 'kro_watch_buf_lines';
     var WATCH_BUF_MIN = 100, WATCH_BUF_MAX = 50000, WATCH_BUF_DEFAULT = 2000;
 
+    // Max console (tee) frames open at once.
+    var WATCH_FRAMES_KEY = 'kro_watch_max_frames';
+    var WATCH_FRAMES_MIN = 1, WATCH_FRAMES_MAX = 12, WATCH_FRAMES_DEFAULT = 4;
+
+    // Upper bound of the stream-count slider (the slider's own value is the
+    // server-side cap, so it isn't stored here).
+    var WATCH_SLIDER_MAX_KEY = 'kro_watch_slider_max';
+    var WATCH_SLIDER_MAX_MIN = 5, WATCH_SLIDER_MAX_MAX = 100, WATCH_SLIDER_MAX_DEFAULT = 30;
+
+    // Stream-list height set by the splitter, in px.
+    var WATCH_SPLIT_KEY = 'kro_watch_split_px';
+
+    function clampedSetting(key, min, max, def) {
+        var v = parseInt(localStorage.getItem(key), 10);
+        if (isNaN(v)) return def;
+        return Math.max(min, Math.min(max, v));
+    }
+
     function getWatchBufLines() {
-        var v = parseInt(localStorage.getItem(WATCH_BUF_KEY), 10);
-        if (isNaN(v)) return WATCH_BUF_DEFAULT;
-        return Math.max(WATCH_BUF_MIN, Math.min(WATCH_BUF_MAX, v));
+        return clampedSetting(WATCH_BUF_KEY, WATCH_BUF_MIN, WATCH_BUF_MAX, WATCH_BUF_DEFAULT);
     }
 
     function setWatchBufLines(v) {
         v = Math.max(WATCH_BUF_MIN, Math.min(WATCH_BUF_MAX, parseInt(v, 10) || WATCH_BUF_DEFAULT));
         localStorage.setItem(WATCH_BUF_KEY, String(v));
         for (var key in frames) trimFrame(frames[key]);
+        return v;
+    }
+
+    function getMaxFrames() {
+        return clampedSetting(WATCH_FRAMES_KEY, WATCH_FRAMES_MIN, WATCH_FRAMES_MAX, WATCH_FRAMES_DEFAULT);
+    }
+
+    function setMaxFrames(v) {
+        v = Math.max(WATCH_FRAMES_MIN, Math.min(WATCH_FRAMES_MAX, parseInt(v, 10) || WATCH_FRAMES_DEFAULT));
+        localStorage.setItem(WATCH_FRAMES_KEY, String(v));
+        return v;
+    }
+
+    function getSliderMax() {
+        return clampedSetting(WATCH_SLIDER_MAX_KEY, WATCH_SLIDER_MAX_MIN, WATCH_SLIDER_MAX_MAX, WATCH_SLIDER_MAX_DEFAULT);
+    }
+
+    function setSliderMax(v) {
+        v = Math.max(WATCH_SLIDER_MAX_MIN, Math.min(WATCH_SLIDER_MAX_MAX, parseInt(v, 10) || WATCH_SLIDER_MAX_DEFAULT));
+        localStorage.setItem(WATCH_SLIDER_MAX_KEY, String(v));
         return v;
     }
 
@@ -82,6 +116,7 @@
                     '<span class="watch-title-sub" id="watch-title-sub"></span>' +
                     '<span class="watch-sse-dot" id="watch-sse-dot" title="Status event stream"></span>' +
                     '<span style="flex:1"></span>' +
+                    '<button type="button" class="watch-gear" id="watch-fs" title="Toggle full screen">⛶</button>' +
                     '<button type="button" class="watch-gear" id="watch-gear" title="Watch settings">⚙</button>' +
                 '</div>' +
                 '<div class="watch-settings-pop" id="watch-settings">' +
@@ -89,6 +124,14 @@
                     '<input type="number" id="watch-buf-input" min="' + WATCH_BUF_MIN + '" max="' + WATCH_BUF_MAX + '" step="100">' +
                     '<div class="watch-settings-hint">' + WATCH_BUF_MIN + '–' + WATCH_BUF_MAX +
                         '. Oldest lines are dropped from the frame; the full log is always in the file.</div>' +
+                    '<label for="watch-frames-input" style="margin-top:10px">Max console frames</label>' +
+                    '<input type="number" id="watch-frames-input" min="' + WATCH_FRAMES_MIN + '" max="' + WATCH_FRAMES_MAX + '" step="1">' +
+                    '<div class="watch-settings-hint">' + WATCH_FRAMES_MIN + '–' + WATCH_FRAMES_MAX +
+                        ' teed streams shown at once below the list.</div>' +
+                    '<label for="watch-slider-max" style="margin-top:10px">Stream slider maximum</label>' +
+                    '<input type="number" id="watch-slider-max" min="' + WATCH_SLIDER_MAX_MIN + '" max="' + WATCH_SLIDER_MAX_MAX + '" step="1">' +
+                    '<div class="watch-settings-hint">' + WATCH_SLIDER_MAX_MIN + '–' + WATCH_SLIDER_MAX_MAX +
+                        '. Upper bound of the max-streams slider.</div>' +
                     '<div class="watch-settings-sep"></div>' +
                     '<div class="watch-log-usage" id="watch-log-usage">log folder: …</div>' +
                     '<label for="watch-clean-days">Delete log files older than (days)</label>' +
@@ -101,17 +144,27 @@
                 '</div>' +
                 '<div class="watch-controls">' +
                     '<button type="button" class="watch-btn primary" id="watch-start">▶ Start Watch</button>' +
+                    '<button type="button" class="watch-btn" id="watch-clear" title="Remove ended streams from the list (log files are kept)">✕ Clear Streams</button>' +
+                    '<span class="watch-slider-wrap" title="Max concurrent streams">' +
+                        '<input type="range" class="watch-slider" id="watch-max-slider" min="1" max="' + getSliderMax() + '" step="1">' +
+                        '<span class="watch-slider-val" id="watch-max-val"></span>' +
+                    '</span>' +
                     '<span class="watch-count" id="watch-count"></span>' +
                     '<span class="watch-notice" id="watch-notice"></span>' +
                 '</div>' +
                 '<div class="watch-stream-list" id="watch-stream-list"></div>' +
-                '<div class="watch-frames empty" id="watch-frames"></div>' +
-                '<div class="watch-frames-placeholder" id="watch-frames-ph">' +
-                    'Tee a stream to the console to view it here (up to ' + MAX_TEE_FRAMES + ' frames)' +
+                '<div class="watch-splitter" id="watch-splitter" title="Drag to resize the stream list"></div>' +
+                '<div class="watch-lower" id="watch-lower">' +
+                    '<div class="watch-lower-head">' +
+                        '<button type="button" class="watch-gear" id="watch-logs-fs" title="Toggle logs full screen">⛶</button>' +
+                    '</div>' +
+                    '<div class="watch-frames empty" id="watch-frames"></div>' +
+                    '<div class="watch-frames-placeholder" id="watch-frames-ph"></div>' +
                 '</div>';
         pageBuilt = true;
 
         document.getElementById('watch-start').addEventListener('click', watchStart);
+        document.getElementById('watch-clear').addEventListener('click', clearStreams);
         document.getElementById('watch-gear').addEventListener('click', toggleSettings);
         document.getElementById('watch-stream-list').addEventListener('click', onListClick);
         document.getElementById('watch-clean-btn').addEventListener('click', cleanupLogs);
@@ -119,6 +172,89 @@
         var bufInput = document.getElementById('watch-buf-input');
         bufInput.addEventListener('change', function() {
             bufInput.value = setWatchBufLines(bufInput.value);
+        });
+
+        var framesInput = document.getElementById('watch-frames-input');
+        framesInput.addEventListener('change', function() {
+            framesInput.value = setMaxFrames(framesInput.value);
+            renderFramesVisibility();
+        });
+
+        var slider = document.getElementById('watch-max-slider');
+        slider.addEventListener('input', function() {
+            document.getElementById('watch-max-val').textContent = slider.value;
+        });
+        slider.addEventListener('change', function() {
+            postJSON('/api/watch/maxstreams', { max: parseInt(slider.value, 10) })
+                .then(fetchWatchStatus)
+                .catch(function(err) { showNotice(err.message); });
+        });
+
+        var sliderMaxInput = document.getElementById('watch-slider-max');
+        sliderMaxInput.addEventListener('change', function() {
+            var v = setSliderMax(sliderMaxInput.value);
+            sliderMaxInput.value = v;
+            slider.max = v;
+            // The range input clamps its own value; push a lowered cap to the server.
+            if (lastStatus && lastStatus.maxStreams > v) {
+                postJSON('/api/watch/maxstreams', { max: v })
+                    .then(fetchWatchStatus)
+                    .catch(function(err) { showNotice(err.message); });
+            }
+        });
+
+        document.getElementById('watch-fs').addEventListener('click', function() {
+            page.classList.toggle('fullscreen');
+        });
+        document.getElementById('watch-logs-fs').addEventListener('click', function() {
+            document.getElementById('watch-lower').classList.toggle('fullscreen');
+        });
+        document.addEventListener('keydown', function(e) {
+            if (e.key !== 'Escape') return;
+            var lower = document.getElementById('watch-lower');
+            if (lower && lower.classList.contains('fullscreen')) {
+                lower.classList.remove('fullscreen');
+            } else if (page.classList.contains('fullscreen')) {
+                page.classList.remove('fullscreen');
+            }
+        });
+
+        initSplitter();
+        renderFramesVisibility();
+    }
+
+    // Splitter between the stream list and the console frames: dragging sets
+    // an explicit pixel height on the list (persisted across reloads),
+    // replacing its default max-height cap.
+    function initSplitter() {
+        var sp = document.getElementById('watch-splitter');
+        var list = document.getElementById('watch-stream-list');
+        var page = document.getElementById('watch-page');
+
+        function applySplit(px) {
+            px = Math.max(48, Math.min(px, page.clientHeight - 220));
+            list.style.height = px + 'px';
+            list.style.maxHeight = 'none';
+        }
+
+        var saved = parseInt(localStorage.getItem(WATCH_SPLIT_KEY), 10);
+        if (!isNaN(saved)) applySplit(saved);
+
+        sp.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            var startY = e.clientY;
+            var startH = list.getBoundingClientRect().height;
+            function move(ev) { applySplit(startH + (ev.clientY - startY)); }
+            function up() {
+                document.removeEventListener('mousemove', move);
+                document.removeEventListener('mouseup', up);
+                document.body.classList.remove('watch-resizing');
+                localStorage.setItem(WATCH_SPLIT_KEY,
+                    String(Math.round(list.getBoundingClientRect().height)));
+            }
+            document.addEventListener('mousemove', move);
+            document.addEventListener('mouseup', up);
+            document.body.classList.add('watch-resizing');
         });
     }
 
@@ -131,6 +267,9 @@
         document.getElementById('watch-title-sub').textContent =
             sel.context && sel.namespace ? sel.context + ' / ' + sel.namespace : '';
         document.getElementById('watch-buf-input').value = getWatchBufLines();
+        document.getElementById('watch-frames-input').value = getMaxFrames();
+        document.getElementById('watch-slider-max').value = getSliderMax();
+        document.getElementById('watch-max-slider').max = getSliderMax();
         fetchWatchStatus();
         connectStatusSSE();
     };
@@ -213,6 +352,14 @@
 
         document.getElementById('watch-count').textContent =
             lastStatus.activeStreams + ' / ' + lastStatus.maxStreams + ' streams';
+
+        // Sync the max-streams slider to the server's cap unless the user is
+        // mid-drag (the slider holds focus while being adjusted).
+        var slider = document.getElementById('watch-max-slider');
+        if (document.activeElement !== slider) {
+            slider.value = lastStatus.maxStreams;
+            document.getElementById('watch-max-val').textContent = slider.value;
+        }
 
         // Start button: disabled when the current selection is already watched.
         var startBtn = document.getElementById('watch-start');
@@ -332,6 +479,17 @@
             .catch(function(err) { showNotice(err.message); });
     }
 
+    function clearStreams() {
+        postJSON('/api/watch/clear')
+            .then(function(res) {
+                showNotice(res.removed
+                    ? 'Removed ' + res.removed + ' ended stream' + (res.removed === 1 ? '' : 's')
+                    : 'No ended streams to remove (active streams stay until stopped)');
+                fetchWatchStatus();
+            })
+            .catch(function(err) { showNotice(err.message); });
+    }
+
     function watchStopSession(ctx, ns) {
         postJSON('/api/watch/stop', { context: ctx, namespace: ns })
             .then(fetchWatchStatus)
@@ -411,8 +569,8 @@
             renderStatus(); // un-highlight the tee button
             return;
         }
-        if (Object.keys(frames).length >= MAX_TEE_FRAMES) {
-            showNotice('Max ' + MAX_TEE_FRAMES + ' console frames — close one first');
+        if (Object.keys(frames).length >= getMaxFrames()) {
+            showNotice('Max ' + getMaxFrames() + ' console frames — close one first or raise the limit in settings');
             return;
         }
         openFrame(ctx, ns, pod, key);
@@ -533,12 +691,14 @@
         if (!framesEl) return;
         var n = Object.keys(frames).length;
         framesEl.classList.toggle('empty', n === 0);
-        // count-N drives the grid layout: 1 full-width, 2 side-by-side,
-        // 3 with the last spanning the bottom row, 4 in a 2x2 grid.
-        for (var i = 1; i <= MAX_TEE_FRAMES; i++) {
-            framesEl.classList.toggle('count-' + i, n === i);
-        }
+        // Grid layout: 1 frame full-width, 2-4 in two columns, 5+ in three;
+        // when the last row would hold a single frame it spans the full width.
+        var cols = n <= 1 ? 1 : (n <= 4 ? 2 : 3);
+        framesEl.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0, 1fr))';
+        framesEl.classList.toggle('span-last', n > cols && n % cols === 1);
         ph.classList.toggle('hidden', n > 0);
+        ph.textContent = 'Tee a stream to the console to view it here (up to ' +
+            getMaxFrames() + ' frames)';
     }
 
     // rAF-batched append (same pattern as the log modal): lines accumulate in
