@@ -4,7 +4,7 @@
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    background: #f5f6fa;
+    background: #dfecee;
     color: #2d3436;
     line-height: 1.5;
     padding: 20px 8px;
@@ -182,8 +182,9 @@ body.dark .metrics-swatch.total {
 .kubeconfig-panel {
     margin-bottom: 20px;
     background: #fff;
+    border: 1px solid #ccdce0;
     border-radius: 12px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    box-shadow: 0 1px 2px rgba(16,24,40,0.04), 0 4px 12px rgba(16,24,40,0.06);
     overflow: hidden;
 }
 
@@ -289,9 +290,10 @@ body.dark .metrics-swatch.total {
     flex: 1;
     min-width: 140px;
     background: #fff;
+    border: 1px solid #ccdce0;
     border-radius: 10px;
     padding: 6px 16px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    box-shadow: 0 1px 2px rgba(16,24,40,0.04), 0 4px 12px rgba(16,24,40,0.06);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -336,8 +338,9 @@ body.dark .metrics-swatch.total {
     gap: 6px;
     padding: 8px;
     background: #fff;
+    border: 1px solid #ccdce0;
     border-radius: 12px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    box-shadow: 0 1px 2px rgba(16,24,40,0.04), 0 4px 12px rgba(16,24,40,0.06);
     transition: flex-basis 0.18s ease-out, padding 0.18s ease-out;
 }
 .tab-sidebar.collapsed { flex: 0 0 50px; padding: 8px 6px; }
@@ -376,11 +379,11 @@ body.dark .metrics-swatch.total {
     font: inherit;
     transition: background 0.12s, border-color 0.12s, color 0.12s, padding 0.18s ease-out;
 }
-.tab-btn:hover { background: #f1f2f6; }
+.tab-btn:hover { background: #e6f1f1; }
 .tab-btn.active {
-    background: #eef4ff;
-    border-color: #b6d4ff;
-    color: #0a4cb3;
+    background: #d6efec;
+    border-color: #8ad3cb;
+    color: #0a6b64;
     font-weight: 600;
 }
 .tab-btn-icon {
@@ -398,8 +401,8 @@ body.dark .metrics-swatch.total {
     line-height: 1;
 }
 .tab-btn.active .tab-btn-icon {
-    background: #b6d4ff;
-    color: #0a4cb3;
+    background: #8ad3cb;
+    color: #0a6b64;
 }
 .tab-btn-text {
     display: flex;
@@ -419,7 +422,7 @@ body.dark .metrics-swatch.total {
     font-weight: 400;
     line-height: 1.2;
 }
-.tab-btn.active .tab-btn-sub { color: #4a6fa5; }
+.tab-btn.active .tab-btn-sub { color: #3f9a91; }
 
 /* Collapsed sidebar: icons only, centered, no labels. */
 .tab-sidebar.collapsed .tab-btn {
@@ -523,8 +526,9 @@ body.dark .tab-collapse-toggle:hover { color: #74b9ff; border-color: #74b9ff; }
 /* Tables */
 .table-wrapper {
     background: #fff;
+    border: 1px solid #ccdce0;
     border-radius: 12px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    box-shadow: 0 1px 2px rgba(16,24,40,0.04), 0 4px 12px rgba(16,24,40,0.06);
     overflow-x: auto;
 }
 
@@ -539,17 +543,17 @@ thead th {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: #636e72;
-    background: #f8f9fa;
+    color: #45645f;
+    background: #e2eff1;
     text-align: left;
-    border-bottom: 2px solid #dfe6e9;
+    border-bottom: 2px solid #ccdce0;
     white-space: nowrap;
 }
 
 tbody td {
     padding: 10px 14px;
     font-size: 0.82rem;
-    border-bottom: 1px solid #f1f2f6;
+    border-bottom: 1px solid #e6f0f1;
     vertical-align: middle;
 }
 
@@ -558,7 +562,7 @@ tbody td {
     cursor: pointer;
     transition: background 0.12s;
 }
-.resource-row:hover { background: #f8f9fa; }
+.resource-row:hover { background: #d9f0f1; }
 
 .expand-arrow {
     display: inline-block;
@@ -573,7 +577,7 @@ tbody td {
 /* Child rows */
 .child-row {
     display: none;
-    background: #fafbfc;
+    background: #e9f4f4;
 }
 .child-row.visible { display: table-row; }
 .child-row td:first-child { padding-left: 44px; }
@@ -581,7 +585,7 @@ tbody td {
 /* Grandchild rows (pods under replicasets) */
 .grandchild-row {
     display: none;
-    background: #f5f6f8;
+    background: #e1eef0;
 }
 .grandchild-row.visible { display: table-row; }
 .grandchild-row td:first-child { padding-left: 68px; }
@@ -1625,6 +1629,97 @@ body.term-resizing * { cursor: ns-resize !important; }
 .tk-comment  { color: #6c7a93; font-style: italic; }
 .tk-number   { color: #4ad7d3; }
 .tk-sep      { color: #a29bfe; font-weight: 600; }
+
+/* ===== Light-mode terminal =====
+   The terminal block above is authored dark (it's shared by both themes). In
+   light mode we re-skin it to a soft blue-gray pane so it sits naturally in the
+   green-cyan page instead of being a black hole. Scoped under body:not(.dark)
+   so dark mode is left exactly as authored. Accent shifts from blue → teal to
+   match the light palette. */
+body:not(.dark) .term-wrapper { background: #dbe6e9; color: #2d3436; }
+body:not(.dark) .term-resizer {
+    background: #cedbe0;
+    border-top: 1px solid rgba(0,0,0,0.07);
+}
+body:not(.dark) .term-resizer:hover,
+body:not(.dark) .term-resizer.dragging { background: #c0d1d6; }
+body:not(.dark) .term-resizer-grip { background: #a1b5bc; }
+body:not(.dark) .term-resizer:hover .term-resizer-grip,
+body:not(.dark) .term-resizer.dragging .term-resizer-grip { background: #0a96a6; }
+body:not(.dark) .term-empty { color: #7a8699; }
+body:not(.dark) .term-block { border-bottom: 1px solid rgba(0,0,0,0.06); }
+body:not(.dark) .term-block-cmd .term-fold { color: #7a8699; }
+body:not(.dark) .term-block-cmd .term-fold:hover { color: #0a96a6; }
+body:not(.dark) .term-block-cmd .term-prompt-mini { color: #0a7d5a; }
+body:not(.dark) .term-block-cmd .term-cmd-text { color: #1f2937; }
+body:not(.dark) .term-blk-btn { border-color: #c8d9de; color: #5a6573; }
+body:not(.dark) .term-blk-btn:hover { color: #0a96a6; border-color: #0a96a6; }
+body:not(.dark) .term-blk-btn.on { background: #0a96a6; color: #fff; border-color: #0a96a6; }
+body:not(.dark) .term-block-out {
+    background: #f6fafb;
+    border-left: 2px solid #c8d9de;
+    color: #2d3436;
+}
+body:not(.dark) .term-block-out .term-stderr { color: #c0392b; }
+body:not(.dark) .term-block-out .term-info { color: #0a7ea4; }
+body:not(.dark) .term-blk-search { background: #e8f1f2; border-color: #c8d9de; }
+body:not(.dark) .term-blk-search-input {
+    background: #fff;
+    border-color: #c8d9de;
+    color: #2d3436;
+}
+body:not(.dark) .term-blk-search-input:focus { border-color: #0a96a6; }
+body:not(.dark) .term-blk-search-opt,
+body:not(.dark) .term-blk-search-nav,
+body:not(.dark) .term-blk-search-close { border-color: #c8d9de; color: #5a6573; }
+body:not(.dark) .term-blk-search-opt:hover,
+body:not(.dark) .term-blk-search-nav:hover,
+body:not(.dark) .term-blk-search-close:hover { color: #0a96a6; border-color: #0a96a6; }
+body:not(.dark) .term-blk-search-opt.on { background: #0a96a6; color: #fff; border-color: #0a96a6; }
+body:not(.dark) .term-blk-search-count { color: #5a6573; }
+body:not(.dark) .term-blk-search-count.error { color: #c0392b; }
+body:not(.dark) .term-input-row {
+    background: #cedbe0;
+    border-top: 1px solid rgba(0,0,0,0.07);
+}
+body:not(.dark) .term-prompt { color: #0a7d5a; }
+body:not(.dark) .term-editor .term-highlight {
+    background: #fff;
+    border-color: #c8d9de;
+    color: #2d3436;
+}
+body:not(.dark) .term-editor .term-input { caret-color: #2d3436; }
+body:not(.dark) .term-editor .term-input::placeholder {
+    color: #8a94a6;
+    -webkit-text-fill-color: #8a94a6;
+}
+body:not(.dark) .term-editor:focus-within .term-highlight {
+    border-color: #0a96a6;
+    box-shadow: 0 0 0 2px rgba(10,150,166,0.18);
+}
+body:not(.dark) .term-editor.has-output-selection .term-highlight {
+    border-color: #0a7d5a;
+    box-shadow: 0 0 0 2px rgba(10,125,90,0.18);
+}
+body:not(.dark) .term-run:disabled { background: #c8d9de; color: #8a94a6; }
+/* Right-click menu is appended to <body>, outside .term-wrapper, so it needs
+   its own light skin. */
+body:not(.dark) .term-ctx-menu {
+    background: #fff;
+    border-color: #c8d9de;
+    box-shadow: 0 8px 22px rgba(16,24,40,0.18);
+}
+body:not(.dark) .term-ctx-menu button { color: #2d3436; }
+body:not(.dark) .term-ctx-menu button:hover { background: rgba(10,150,166,0.12); color: #0a3d44; }
+body:not(.dark) .term-ctx-menu button code { color: #b6701a; background: rgba(0,0,0,0.06); }
+/* kubectl syntax tokens — retuned for the light pane. */
+body:not(.dark) .tk-verb     { color: #0a7d5a; }
+body:not(.dark) .tk-resource { color: #0a6cc4; }
+body:not(.dark) .tk-flag     { color: #b6701a; }
+body:not(.dark) .tk-string   { color: #a8521f; }
+body:not(.dark) .tk-comment  { color: #7a8699; }
+body:not(.dark) .tk-number   { color: #0a8e9a; }
+body:not(.dark) .tk-sep      { color: #6c5ce7; }
 
 /* Dark mode: the terminal already uses dark colors. Light mode keeps the
    header text/buttons readable against the surrounding light section. */
