@@ -10,9 +10,12 @@ live updates over SSE, no cluster-side install.
 - Per-cluster pinned namespace lists you build up yourself (add `+`, remove `×`).
   Stored as a small JSON file at `os.UserConfigDir()/kro/state.json`.
 - Hierarchical resource tree: Jobs, Deployments+ReplicaSets+Pods, StatefulSets,
-  DaemonSets, plus flat read-only listings for Services, Ingresses, ConfigMaps, Secrets.
+  DaemonSets, plus flat read-only listings for Services, Ingresses, ConfigMaps,
+  Secrets, and storage (PersistentVolumes, PersistentVolumeClaims, StorageClasses).
 - Per-row actions: Describe (kubectl-describe-style text), Logs (Pods, all containers),
   Delete (Job/Pod/Deployment/ReplicaSet only).
+- Live per-pod CPU/memory metrics streamed from `metrics.k8s.io` (requires the
+  metrics-server to be installed in the cluster).
 - Log level filtering: both the Logs modal and Pod Watch console frames have
   small colored Deb/Inf/Wrn/Err/Ftl buttons that show/hide lines by level
   (detected from `level=...` fields or bare tokens like `INFO`/`ERRO`/`Wrn`;
@@ -35,10 +38,10 @@ live updates over SSE, no cluster-side install.
   usage and offers manual cleanup.
 - Live updates every ~10s via Server-Sent Events; each browser tab can target a
   different cluster/namespace independently (selection is cookie-keyed).
-- Resource sections organized behind left vertical tabs (Watch, Pods,
-  Deployments, Networking, Sets, Config); sidebar collapses to an icon strip,
-  with tab/collapse state persisted per browser.
-- Dark mode.
+- Resource sections organized behind left vertical tabs (Pods, Watch,
+  Deployments, Networking, Storage, Sets, Config); sidebar collapses to an icon
+  strip, with tab/collapse state persisted per browser.
+- Light and dark themes (defaults to light; 🌙/☀️ toggle, persisted per browser).
 
 ## Install
 
@@ -188,3 +191,8 @@ docker run --rm -it -p 8222:8222 \
 The mounted host directory for state must be writable by UID 1001
 (`chown 1001 /path/to/configs/kro` or `chmod 777`). Use a named volume
 (`-v kro-state:/home/app/.config/kro`) if you'd rather Docker manage it.
+
+## License
+
+[MIT](LICENSE) — free for personal and commercial use. Just retain the
+copyright and license notice (the credit to this repo).
