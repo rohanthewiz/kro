@@ -39,10 +39,27 @@ KRO_PORT="${KRO_PORT:-8222}"
 
 if [ -t 1 ]; then
   C_BLUE=$'\033[34m'; C_YELLOW=$'\033[33m'; C_RED=$'\033[31m'
-  C_GREEN=$'\033[32m'; C_DIM=$'\033[2m'; C_RESET=$'\033[0m'
+  C_GREEN=$'\033[32m'; C_CYAN=$'\033[36m'; C_DIM=$'\033[2m'; C_RESET=$'\033[0m'
 else
-  C_BLUE=""; C_YELLOW=""; C_RED=""; C_GREEN=""; C_DIM=""; C_RESET=""
+  C_BLUE=""; C_YELLOW=""; C_RED=""; C_GREEN=""; C_CYAN=""; C_DIM=""; C_RESET=""
 fi
+
+# ---- banner ----------------------------------------------------------------
+
+banner() {
+  printf '%s' "$C_GREEN"
+  cat <<'ART'
+
+   ██╗  ██╗██████╗  ██████╗
+   ██║ ██╔╝██╔══██╗██╔═══██╗
+   █████╔╝ ██████╔╝██║   ██║
+   ██╔═██╗ ██╔══██╗██║   ██║
+   ██║  ██╗██║  ██║╚██████╔╝
+   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝
+ART
+  printf '%s' "$C_RESET"
+  printf '   %sKubernetes resources, natively on your Mac%s\n\n' "$C_CYAN" "$C_RESET"
+}
 
 info() { printf '%s==>%s %s\n' "$C_BLUE" "$C_RESET" "$*"; }
 ok()   { printf '%s ok%s %s\n'  "$C_GREEN" "$C_RESET" "$*"; }
@@ -209,6 +226,106 @@ build_kro() {
   KRO_BUILD_ID="$build_id"
 }
 
+# ---- app icon --------------------------------------------------------------
+
+# build_app_icon RESOURCES_DIR -> writes RESOURCES_DIR/KRo.icns, returns 0 on
+# success. Renders a squircle with the green->teal brand gradient and a white
+# ship's-helm wheel (a nod to Kubernetes) via a tiny AppKit program. Offscreen
+# AppKit drawing needs a window-server connection, so this can fail on a
+# headless/SSH install — callers treat failure as non-fatal.
+build_app_icon() {
+  local resources="$1" tmp icon_swift icon_bin iconset
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  icon_swift="$tmp/MakeIcon.swift"
+  icon_bin="$tmp/makeicon"
+  iconset="$tmp/KRo.iconset"
+  mkdir -p "$iconset"
+
+  cat > "$icon_swift" <<'SWIFT'
+import AppKit
+import Foundation
+
+func draw(_ size: CGFloat) {
+    guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+    let full = CGRect(x: 0, y: 0, width: size, height: size)
+    ctx.clear(full)
+
+    // macOS-style squircle background.
+    let inset = size * 0.045
+    let r = full.insetBy(dx: inset, dy: inset)
+    let bg = NSBezierPath(roundedRect: r, xRadius: r.width * 0.2237, yRadius: r.height * 0.2237)
+    bg.addClip()
+
+    let green = NSColor(srgbRed: 0.16, green: 0.81, blue: 0.55, alpha: 1.0)
+    let teal  = NSColor(srgbRed: 0.04, green: 0.59, blue: 0.65, alpha: 1.0)
+    if let grad = NSGradient(starting: green, ending: teal) {
+        grad.draw(in: r, angle: -50)
+    }
+
+    // White ship's-helm wheel, centered.
+    let cx = size / 2, cy = size / 2
+    let outerR = size * 0.295
+    let hubR = size * 0.085
+    let white = NSColor.white
+
+    white.setStroke()
+    let ring = NSBezierPath(ovalIn: CGRect(x: cx - outerR, y: cy - outerR, width: outerR * 2, height: outerR * 2))
+    ring.lineWidth = size * 0.052
+    ring.stroke()
+
+    let spokeCount = 7
+    let nubR = size * 0.052
+    for i in 0..<spokeCount {
+        let a = CGFloat(i) * (.pi * 2 / CGFloat(spokeCount)) - .pi / 2
+        let inner = CGPoint(x: cx + cos(a) * hubR, y: cy + sin(a) * hubR)
+        let outer = CGPoint(x: cx + cos(a) * (outerR + size * 0.045), y: cy + sin(a) * (outerR + size * 0.045))
+        let spoke = NSBezierPath()
+        spoke.move(to: inner)
+        spoke.line(to: outer)
+        spoke.lineWidth = size * 0.04
+        spoke.lineCapStyle = .round
+        white.setStroke()
+        spoke.stroke()
+        let nub = NSBezierPath(ovalIn: CGRect(x: outer.x - nubR, y: outer.y - nubR, width: nubR * 2, height: nubR * 2))
+        white.setFill()
+        nub.fill()
+    }
+    let hub = NSBezierPath(ovalIn: CGRect(x: cx - hubR, y: cy - hubR, width: hubR * 2, height: hubR * 2))
+    white.setFill()
+    hub.fill()
+}
+
+func png(_ px: Int) -> Data {
+    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px,
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    draw(CGFloat(px))
+    NSGraphicsContext.restoreGraphicsState()
+    return rep.representation(using: .png, properties: [:])!
+}
+
+let outDir = CommandLine.arguments[1]
+let targets: [(String, Int)] = [
+    ("icon_16x16.png", 16),    ("icon_16x16@2x.png", 32),
+    ("icon_32x32.png", 32),    ("icon_32x32@2x.png", 64),
+    ("icon_128x128.png", 128), ("icon_128x128@2x.png", 256),
+    ("icon_256x256.png", 256), ("icon_256x256@2x.png", 512),
+    ("icon_512x512.png", 512), ("icon_512x512@2x.png", 1024),
+]
+for (name, px) in targets {
+    try png(px).write(to: URL(fileURLWithPath: outDir).appendingPathComponent(name))
+}
+SWIFT
+
+  swiftc "$icon_swift" -o "$icon_bin" -framework AppKit >/dev/null 2>&1 || return 1
+  "$icon_bin" "$iconset" >/dev/null 2>&1 || return 1
+  iconutil -c icns "$iconset" -o "$resources/KRo.icns" >/dev/null 2>&1 || return 1
+  [ -f "$resources/KRo.icns" ]
+}
+
 # ---- macOS app -------------------------------------------------------------
 
 install_macos_app() {
@@ -229,6 +346,15 @@ install_macos_app() {
   cp "$KRO_DIR/kro" "$bundled_kro"
   chmod +x "$bundled_kro"
 
+  local icon_plist=""
+  info "generating app icon"
+  if build_app_icon "$resources"; then
+    icon_plist=$'  <key>CFBundleIconFile</key>\n  <string>KRo</string>'
+    ok "app icon generated"
+  else
+    warn "could not generate app icon (continuing without one)"
+  fi
+
   cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -242,6 +368,7 @@ install_macos_app() {
   <string>$KRO_APP_NAME</string>
   <key>CFBundleIdentifier</key>
   <string>$bundle_id</string>
+$icon_plist
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
@@ -401,6 +528,7 @@ EOF
 # ---- main ------------------------------------------------------------------
 
 main() {
+  banner
   detect_platform
   require_git
   require_swiftc
