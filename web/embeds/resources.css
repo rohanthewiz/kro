@@ -605,6 +605,9 @@ tbody td {
 .kind-badge.ingress { background: #f5cba7; color: #784212; }
 .kind-badge.configmap { background: #e8e8e8; color: #555; }
 .kind-badge.secret { background: #f8d7da; color: #721c24; }
+.kind-badge.persistentvolume { background: #d5f5e3; color: #1e8449; }
+.kind-badge.persistentvolumeclaim { background: #d4efdf; color: #148f5b; }
+.kind-badge.storageclass { background: #fcf3cf; color: #9a7d0a; }
 
 /* Status badges */
 .status-badge {
@@ -1026,6 +1029,9 @@ body.dark .kind-badge.job { background: #2d2d44; color: #b2bec3; }
 body.dark .kind-badge.pod { background: #1a2745; color: #54a0ff; }
 body.dark .kind-badge.deployment { background: #251a3a; color: #a29bfe; }
 body.dark .kind-badge.replicaset { background: #2d2015; color: #e17055; }
+body.dark .kind-badge.persistentvolume { background: #14301f; color: #55efc4; }
+body.dark .kind-badge.persistentvolumeclaim { background: #16281f; color: #2ecc71; }
+body.dark .kind-badge.storageclass { background: #2d2a15; color: #f1c40f; }
 
 body.dark .empty-state { color: #636e72; }
 body.dark .btn-clear-config { background: #2d2d44; color: #b2bec3; }

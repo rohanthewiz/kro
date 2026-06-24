@@ -62,26 +62,28 @@ func renderPage(buildNumber string) string {
 }
 
 func summaryCard(b *element.Builder, cls, label, valueID string) any {
-	b.DivClass("summary-card " + cls).R(
+	b.DivClass("summary-card "+cls).R(
 		b.DivClass("label").T(label),
 		b.Div("class", "value", "id", valueID).T("-"),
 	)
 	return nil
 }
 
-// tabLayout renders the left vertical tab sidebar and the five corresponding
+// tabLayout renders the left vertical tab sidebar and its corresponding
 // content panels on the right. Section assignment is hardwired here and in
 // the JS TAB_CONFIG; the structure is meant to make tab-and-section
 // configurability a near-term follow-up (each panel has a stable id, and JS
 // reads the same config to populate them).
 //
 // Panel composition:
-//   workloads   — Terminal, Jobs, All Pods (+ Pods orphan if any); shown as "Pods"
-//   watch       — Pod Watch page (markup built by watch.js on first visit)
-//   deployments — Deployments & ReplicaSets, All Pods
-//   networking  — Services, Ingresses
-//   sets        — StatefulSets, DaemonSets
-//   config      — ConfigMaps, Secrets
+//
+//	workloads   — Terminal, Jobs, All Pods (+ Pods orphan if any); shown as "Pods"
+//	watch       — Pod Watch page (markup built by watch.js on first visit)
+//	deployments — Deployments & ReplicaSets, All Pods
+//	networking  — Services, Ingresses
+//	storage     — PersistentVolumes, PersistentVolumeClaims, StorageClasses
+//	sets        — StatefulSets, DaemonSets
+//	config      — ConfigMaps, Secrets
 func tabLayout(b *element.Builder) any {
 	// The workloads tab keeps its internal id (localStorage keys, section
 	// routing, JS TAB_CONFIG) but is presented as "Pods".
@@ -92,6 +94,7 @@ func tabLayout(b *element.Builder) any {
 		{"watch", "Watch", "Pod log capture", "W"},
 		{"deployments", "Deployments", "Deployments · Pods", "D"},
 		{"networking", "Networking", "Services · Ingresses", "N"},
+		{"storage", "Storage", "Volumes · Claims · Classes", "V"},
 		{"sets", "Sets", "StatefulSets · DaemonSets", "S"},
 		{"config", "Config", "ConfigMaps · Secrets", "C"},
 	}
@@ -152,6 +155,9 @@ func tabLayout(b *element.Builder) any {
 			),
 			b.Div("class", "tab-panel", "role", "tabpanel", "id", "tab-panel-networking", "data-tab-panel", "networking", "aria-labelledby", "tab-btn-networking").R(
 				b.Div("class", "tab-sections", "id", "tab-sections-networking").R(),
+			),
+			b.Div("class", "tab-panel", "role", "tabpanel", "id", "tab-panel-storage", "data-tab-panel", "storage", "aria-labelledby", "tab-btn-storage").R(
+				b.Div("class", "tab-sections", "id", "tab-sections-storage").R(),
 			),
 			b.Div("class", "tab-panel", "role", "tabpanel", "id", "tab-panel-sets", "data-tab-panel", "sets", "aria-labelledby", "tab-btn-sets").R(
 				b.Div("class", "tab-sections", "id", "tab-sections-sets").R(),

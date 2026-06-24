@@ -3,12 +3,14 @@ package kube
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/rohanthewiz/logger"
 	appsV1 "k8s.io/api/apps/v1"
 	batchV1 "k8s.io/api/batch/v1"
 	coreV1 "k8s.io/api/core/v1"
 	netV1 "k8s.io/api/networking/v1"
+	storageV1 "k8s.io/api/storage/v1"
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -32,18 +34,23 @@ type K8sResource struct {
 
 // ResourceTree is the JSON shape sent to the page.
 type ResourceTree struct {
-	Context     string        `json:"context"`
-	Namespace   string        `json:"namespace"`
-	Jobs        []K8sResource `json:"jobs"`
-	Deployments []K8sResource `json:"deployments"`
+	Context      string        `json:"context"`
+	Namespace    string        `json:"namespace"`
+	Jobs         []K8sResource `json:"jobs"`
+	Deployments  []K8sResource `json:"deployments"`
 	StatefulSets []K8sResource `json:"statefulsets"`
 	DaemonSets   []K8sResource `json:"daemonsets"`
-	OrphanPods  []K8sResource `json:"orphan_pods"`
-	Services    []K8sResource `json:"services"`
-	Ingresses   []K8sResource `json:"ingresses"`
-	ConfigMaps  []K8sResource `json:"configmaps"`
-	Secrets     []K8sResource `json:"secrets"`
-	Warnings    []string      `json:"warnings,omitempty"`
+	OrphanPods   []K8sResource `json:"orphan_pods"`
+	Services     []K8sResource `json:"services"`
+	Ingresses    []K8sResource `json:"ingresses"`
+	ConfigMaps   []K8sResource `json:"configmaps"`
+	Secrets      []K8sResource `json:"secrets"`
+	// Storage objects. PersistentVolumes and StorageClasses are cluster-scoped
+	// (listed cluster-wide); PersistentVolumeClaims are namespaced.
+	PersistentVolumes      []K8sResource `json:"persistentvolumes"`
+	PersistentVolumeClaims []K8sResource `json:"persistentvolumeclaims"`
+	StorageClasses         []K8sResource `json:"storageclasses"`
+	Warnings               []string      `json:"warnings,omitempty"`
 }
 
 // ListResources fetches the resource tree for the given namespace.
@@ -122,6 +129,29 @@ func ListResources(client *kubernetes.Clientset, ns string) (ResourceTree, error
 		logger.WarnF("skipping secrets: %v", err)
 		warnings = append(warnings, "Could not list Secrets — check RBAC permissions")
 		secrets = &coreV1.SecretList{}
+	}
+
+	// PersistentVolumes are cluster-scoped — listed cluster-wide, not by namespace.
+	pvs, err := client.CoreV1().PersistentVolumes().List(bgCtx, listOpts)
+	if err != nil {
+		logger.WarnF("skipping persistentvolumes: %v", err)
+		warnings = append(warnings, "Could not list PersistentVolumes — check RBAC permissions")
+		pvs = &coreV1.PersistentVolumeList{}
+	}
+
+	pvcs, err := client.CoreV1().PersistentVolumeClaims(ns).List(bgCtx, listOpts)
+	if err != nil {
+		logger.WarnF("skipping persistentvolumeclaims: %v", err)
+		warnings = append(warnings, "Could not list PersistentVolumeClaims — check RBAC permissions")
+		pvcs = &coreV1.PersistentVolumeClaimList{}
+	}
+
+	// StorageClasses are cluster-scoped.
+	storageClasses, err := client.StorageV1().StorageClasses().List(bgCtx, listOpts)
+	if err != nil {
+		logger.WarnF("skipping storageclasses: %v", err)
+		warnings = append(warnings, "Could not list StorageClasses — check RBAC permissions")
+		storageClasses = &storageV1.StorageClassList{}
 	}
 
 	type indexedRS struct {
@@ -235,6 +265,15 @@ func ListResources(client *kubernetes.Clientset, ns string) (ResourceTree, error
 	}
 	for _, s := range secrets.Items {
 		tree.Secrets = append(tree.Secrets, secretToResource(s))
+	}
+	for _, pv := range pvs.Items {
+		tree.PersistentVolumes = append(tree.PersistentVolumes, pvToResource(pv))
+	}
+	for _, pvc := range pvcs.Items {
+		tree.PersistentVolumeClaims = append(tree.PersistentVolumeClaims, pvcToResource(pvc))
+	}
+	for _, sc := range storageClasses.Items {
+		tree.StorageClasses = append(tree.StorageClasses, storageClassToResource(sc))
 	}
 
 	tree.OrphanPods = orphanPods
@@ -399,6 +438,105 @@ func secretToResource(s coreV1.Secret) K8sResource {
 		Age:    formatAge(s.CreationTimestamp.Time),
 		Extra:  fmt.Sprintf("%d keys", len(s.Data)),
 	}
+}
+
+func pvToResource(pv coreV1.PersistentVolume) K8sResource {
+	parts := []string{storageCapacity(pv.Spec.Capacity)}
+	if modes := accessModesShort(pv.Spec.AccessModes); modes != "" {
+		parts = append(parts, modes)
+	}
+	if pv.Spec.PersistentVolumeReclaimPolicy != "" {
+		parts = append(parts, string(pv.Spec.PersistentVolumeReclaimPolicy))
+	}
+	if pv.Spec.StorageClassName != "" {
+		parts = append(parts, "sc:"+pv.Spec.StorageClassName)
+	}
+	if pv.Spec.ClaimRef != nil {
+		parts = append(parts, "→ "+pv.Spec.ClaimRef.Namespace+"/"+pv.Spec.ClaimRef.Name)
+	}
+	return K8sResource{
+		Kind:   "PersistentVolume",
+		Name:   pv.Name,
+		Status: string(pv.Status.Phase),
+		Age:    formatAge(pv.CreationTimestamp.Time),
+		Extra:  strings.Join(parts, " · "),
+	}
+}
+
+func pvcToResource(pvc coreV1.PersistentVolumeClaim) K8sResource {
+	// Prefer the bound capacity; fall back to the request for unbound claims.
+	capacity := storageCapacity(pvc.Status.Capacity)
+	if capacity == "-" {
+		capacity = storageCapacity(pvc.Spec.Resources.Requests)
+	}
+	parts := []string{capacity}
+	if modes := accessModesShort(pvc.Spec.AccessModes); modes != "" {
+		parts = append(parts, modes)
+	}
+	if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName != "" {
+		parts = append(parts, "sc:"+*pvc.Spec.StorageClassName)
+	}
+	if pvc.Spec.VolumeName != "" {
+		parts = append(parts, "→ "+pvc.Spec.VolumeName)
+	}
+	return K8sResource{
+		Kind:   "PersistentVolumeClaim",
+		Name:   pvc.Name,
+		Status: string(pvc.Status.Phase),
+		Age:    formatAge(pvc.CreationTimestamp.Time),
+		Extra:  strings.Join(parts, " · "),
+	}
+}
+
+func storageClassToResource(sc storageV1.StorageClass) K8sResource {
+	var parts []string
+	if sc.Annotations["storageclass.kubernetes.io/is-default-class"] == "true" {
+		parts = append(parts, "default")
+	}
+	if sc.ReclaimPolicy != nil {
+		parts = append(parts, string(*sc.ReclaimPolicy))
+	}
+	if sc.VolumeBindingMode != nil {
+		parts = append(parts, string(*sc.VolumeBindingMode))
+	}
+	if sc.AllowVolumeExpansion != nil && *sc.AllowVolumeExpansion {
+		parts = append(parts, "expandable")
+	}
+	return K8sResource{
+		Kind:   "StorageClass",
+		Name:   sc.Name,
+		Status: sc.Provisioner,
+		Age:    formatAge(sc.CreationTimestamp.Time),
+		Extra:  strings.Join(parts, " · "),
+	}
+}
+
+// storageCapacity returns the storage quantity from a resource list, or "-".
+func storageCapacity(list coreV1.ResourceList) string {
+	if q, ok := list[coreV1.ResourceStorage]; ok {
+		return q.String()
+	}
+	return "-"
+}
+
+// accessModesShort abbreviates PV/PVC access modes (RWO/ROX/RWX/RWOP).
+func accessModesShort(modes []coreV1.PersistentVolumeAccessMode) string {
+	out := make([]string, 0, len(modes))
+	for _, m := range modes {
+		switch m {
+		case coreV1.ReadWriteOnce:
+			out = append(out, "RWO")
+		case coreV1.ReadOnlyMany:
+			out = append(out, "ROX")
+		case coreV1.ReadWriteMany:
+			out = append(out, "RWX")
+		case coreV1.ReadWriteOncePod:
+			out = append(out, "RWOP")
+		default:
+			out = append(out, string(m))
+		}
+	}
+	return strings.Join(out, ",")
 }
 
 // ----- status helpers -----

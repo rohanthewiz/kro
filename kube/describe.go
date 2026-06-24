@@ -11,6 +11,7 @@ import (
 	batchV1 "k8s.io/api/batch/v1"
 	coreV1 "k8s.io/api/core/v1"
 	netV1 "k8s.io/api/networking/v1"
+	storageV1 "k8s.io/api/storage/v1"
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -83,6 +84,24 @@ func Describe(client *kubernetes.Clientset, ns, kind, name string) (string, erro
 			return "", serr.Wrap(err)
 		}
 		describeSecret(&buf, s)
+	case "PersistentVolume":
+		pv, err := client.CoreV1().PersistentVolumes().Get(bgCtx, name, metaV1.GetOptions{})
+		if err != nil {
+			return "", serr.Wrap(err)
+		}
+		describePersistentVolume(&buf, pv)
+	case "PersistentVolumeClaim":
+		pvc, err := client.CoreV1().PersistentVolumeClaims(ns).Get(bgCtx, name, metaV1.GetOptions{})
+		if err != nil {
+			return "", serr.Wrap(err)
+		}
+		describePersistentVolumeClaim(&buf, pvc)
+	case "StorageClass":
+		sc, err := client.StorageV1().StorageClasses().Get(bgCtx, name, metaV1.GetOptions{})
+		if err != nil {
+			return "", serr.Wrap(err)
+		}
+		describeStorageClass(&buf, sc)
 	default:
 		return "", serr.New("unsupported kind: " + kind)
 	}
@@ -380,6 +399,108 @@ func describeSecret(buf *bytes.Buffer, s *coreV1.Secret) {
 			fmt.Fprintf(buf, "  %s: (%d bytes)\n", k, len(s.Data[k]))
 		}
 	}
+}
+
+func describePersistentVolume(buf *bytes.Buffer, pv *coreV1.PersistentVolume) {
+	fmt.Fprintf(buf, "Name:         %s\n", pv.Name)
+	fmt.Fprintf(buf, "Status:       %s\n", pv.Status.Phase)
+	if pv.Status.Reason != "" {
+		fmt.Fprintf(buf, "Reason:       %s\n", pv.Status.Reason)
+	}
+	fmt.Fprintf(buf, "Capacity:     %s\n", storageCapacity(pv.Spec.Capacity))
+	if len(pv.Spec.AccessModes) > 0 {
+		fmt.Fprintf(buf, "Access Modes: %s\n", accessModesShort(pv.Spec.AccessModes))
+	}
+	fmt.Fprintf(buf, "Reclaim:      %s\n", pv.Spec.PersistentVolumeReclaimPolicy)
+	if pv.Spec.StorageClassName != "" {
+		fmt.Fprintf(buf, "StorageClass: %s\n", pv.Spec.StorageClassName)
+	}
+	if pv.Spec.VolumeMode != nil {
+		fmt.Fprintf(buf, "Volume Mode:  %s\n", *pv.Spec.VolumeMode)
+	}
+	if src := pvSourceType(pv.Spec.PersistentVolumeSource); src != "" {
+		fmt.Fprintf(buf, "Source:       %s\n", src)
+	}
+	if pv.Spec.ClaimRef != nil {
+		fmt.Fprintf(buf, "Claim:        %s/%s\n", pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.Name)
+	}
+	writeLabels(buf, pv.Labels)
+}
+
+func describePersistentVolumeClaim(buf *bytes.Buffer, pvc *coreV1.PersistentVolumeClaim) {
+	fmt.Fprintf(buf, "Name:         %s\n", pvc.Name)
+	fmt.Fprintf(buf, "Namespace:    %s\n", pvc.Namespace)
+	fmt.Fprintf(buf, "Status:       %s\n", pvc.Status.Phase)
+	if pvc.Spec.VolumeName != "" {
+		fmt.Fprintf(buf, "Volume:       %s\n", pvc.Spec.VolumeName)
+	}
+	fmt.Fprintf(buf, "Requested:    %s\n", storageCapacity(pvc.Spec.Resources.Requests))
+	if bound := storageCapacity(pvc.Status.Capacity); bound != "-" {
+		fmt.Fprintf(buf, "Capacity:     %s\n", bound)
+	}
+	if len(pvc.Spec.AccessModes) > 0 {
+		fmt.Fprintf(buf, "Access Modes: %s\n", accessModesShort(pvc.Spec.AccessModes))
+	}
+	if pvc.Spec.StorageClassName != nil {
+		fmt.Fprintf(buf, "StorageClass: %s\n", *pvc.Spec.StorageClassName)
+	}
+	if pvc.Spec.VolumeMode != nil {
+		fmt.Fprintf(buf, "Volume Mode:  %s\n", *pvc.Spec.VolumeMode)
+	}
+	writeLabels(buf, pvc.Labels)
+}
+
+func describeStorageClass(buf *bytes.Buffer, sc *storageV1.StorageClass) {
+	fmt.Fprintf(buf, "Name:         %s\n", sc.Name)
+	if sc.Annotations["storageclass.kubernetes.io/is-default-class"] == "true" {
+		fmt.Fprintf(buf, "IsDefault:    Yes\n")
+	}
+	fmt.Fprintf(buf, "Provisioner:  %s\n", sc.Provisioner)
+	if sc.ReclaimPolicy != nil {
+		fmt.Fprintf(buf, "Reclaim:      %s\n", *sc.ReclaimPolicy)
+	}
+	if sc.VolumeBindingMode != nil {
+		fmt.Fprintf(buf, "Binding Mode: %s\n", *sc.VolumeBindingMode)
+	}
+	if sc.AllowVolumeExpansion != nil {
+		fmt.Fprintf(buf, "Expandable:   %v\n", *sc.AllowVolumeExpansion)
+	}
+	writeLabels(buf, sc.Labels)
+
+	if len(sc.Parameters) > 0 {
+		fmt.Fprintf(buf, "\nParameters:\n")
+		keys := make([]string, 0, len(sc.Parameters))
+		for k := range sc.Parameters {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(buf, "  %s=%s\n", k, sc.Parameters[k])
+		}
+	}
+}
+
+// pvSourceType returns a short label for a PV's backing volume source.
+func pvSourceType(src coreV1.PersistentVolumeSource) string {
+	switch {
+	case src.CSI != nil:
+		return "CSI: " + src.CSI.Driver
+	case src.HostPath != nil:
+		return "HostPath: " + src.HostPath.Path
+	case src.NFS != nil:
+		return fmt.Sprintf("NFS: %s:%s", src.NFS.Server, src.NFS.Path)
+	case src.Local != nil:
+		return "Local: " + src.Local.Path
+	case src.AWSElasticBlockStore != nil:
+		return "AWS EBS"
+	case src.GCEPersistentDisk != nil:
+		return "GCE PD"
+	case src.AzureDisk != nil:
+		return "Azure Disk"
+	case src.AzureFile != nil:
+		return "Azure File"
+	}
+	return ""
 }
 
 func writeLabels(buf *bytes.Buffer, labels map[string]string) {

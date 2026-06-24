@@ -179,6 +179,7 @@
         { id: 'workloads',   sections: ['jobs', 'all-pods', 'pods-orphan'] },
         { id: 'deployments', sections: ['deployments', 'all-pods'] },
         { id: 'networking',  sections: ['services', 'ingresses'] },
+        { id: 'storage',     sections: ['pvs', 'pvcs', 'storageclasses'] },
         { id: 'sets',        sections: ['statefulsets', 'daemonsets'] },
         { id: 'config',      sections: ['configmaps', 'secrets'] },
         { id: 'watch',       sections: [] }
@@ -373,6 +374,15 @@
         },
         'ingresses': function(ctx) {
             return flatSection('ingresses', 'Ingresses', ctx.tree.ingresses || []);
+        },
+        'pvs': function(ctx) {
+            return flatSection('pvs', 'PersistentVolumes', ctx.tree.persistentvolumes || []);
+        },
+        'pvcs': function(ctx) {
+            return flatSection('pvcs', 'PersistentVolumeClaims', ctx.tree.persistentvolumeclaims || []);
+        },
+        'storageclasses': function(ctx) {
+            return flatSection('storageclasses', 'StorageClasses', ctx.tree.storageclasses || []);
         },
         'configmaps': function(ctx) {
             return flatSection('configmaps', 'ConfigMaps', ctx.tree.configmaps || []);
