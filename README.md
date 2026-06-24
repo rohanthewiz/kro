@@ -54,6 +54,33 @@ Re-run the same command any time to update.
 
 Override paths via env: `KRO_DIR`, `KRO_BIN_DIR`, `KRO_GO_DIR`, `KRO_GO_VERSION`.
 
+### Native macOS app
+
+Prefer a real macOS app over a CLI + browser tab? This installs `KRo.app` into
+`~/Applications` with a small Swift/WebKit wrapper that launches the bundled
+server and shows the UI in its own window.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/rohanthewiz/kro/main/mac-install.sh | bash
+```
+
+Pulls the latest `main` into `~/.kro`, fetches Go 1.26 into `~/.local/go` if your
+system Go is missing or older (no sudo), builds `kro`, and assembles the app
+bundle. Re-run any time to update to the latest `main`.
+
+Requires the Xcode Command Line Tools (`xcode-select --install`) for `git` and
+`swiftc`. Open `KRo.app` from Finder, Spotlight, or the Dock; logs go to
+`~/Library/Logs/KRo/kro.log`. The app reuses an already-running server on its
+port if one is healthy (and leaves it running when you quit); otherwise it
+starts and owns its own.
+
+> The app is not code-signed, so the first launch may need a right-click → **Open**.
+> `mac-install.sh` owns `~/.kro` and `git reset --hard`s it on each run — keep no
+> local edits there.
+
+Override behavior via env: `KRO_DIR`, `KRO_GO_DIR`, `KRO_GO_VERSION`,
+`KRO_APP_DIR`, `KRO_APP_NAME`, `KRO_PORT`.
+
 ### From source
 
 ```sh
