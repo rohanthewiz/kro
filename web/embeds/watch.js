@@ -863,21 +863,21 @@
     }
 
     function navigateFrameMatch(frame, delta) {
-        var marks = frame.body.querySelectorAll('mark.log-match');
-        if (!marks.length) return;
+        var groups = window.kroLogSearch.markGroups(frame.body.querySelectorAll('mark.log-match'));
+        if (!groups.length) return;
         var cur = -1;
-        for (var i = 0; i < marks.length; i++) {
-            if (marks[i].classList.contains('current')) { cur = i; break; }
+        for (var i = 0; i < groups.length; i++) {
+            if (groups[i][0].classList.contains('current')) { cur = i; break; }
         }
         var next;
         if (cur === -1) {
-            next = delta >= 0 ? 0 : marks.length - 1;
+            next = delta >= 0 ? 0 : groups.length - 1;
         } else {
-            next = ((cur + delta) % marks.length + marks.length) % marks.length;
-            marks[cur].classList.remove('current');
+            next = ((cur + delta) % groups.length + groups.length) % groups.length;
+            groups[cur].forEach(function(m) { m.classList.remove('current'); });
         }
-        marks[next].classList.add('current');
-        marks[next].scrollIntoView({ block: 'center', behavior: 'smooth' });
+        groups[next].forEach(function(m) { m.classList.add('current'); });
+        groups[next][0].scrollIntoView({ block: 'center', behavior: 'smooth' });
         frame.search.currentIndex = next;
         refreshFrameSearchCount(frame);
     }
@@ -959,7 +959,7 @@
                     if (LS.lineHidden(newSpans[j], body)) continue;
                     LS.highlightIn(newSpans[j], rx);
                 }
-                frame.search.matchCount = body.querySelectorAll('mark.log-match').length;
+                frame.search.matchCount = LS.markGroups(body.querySelectorAll('mark.log-match')).length;
                 refreshFrameSearchCount(frame);
             }
         }

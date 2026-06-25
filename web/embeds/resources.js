@@ -1231,6 +1231,12 @@
         }
     }
 
+    // Monotonic id shared by all <mark> segments of a single logical match.
+    // Colorizing splits a line into many text nodes, so a match like
+    // "worker.*2026" can span several of them; tagging every segment with the
+    // same data-mi lets navigation and counts collapse them back into one.
+    var matchSeq = 0;
+
     function highlightMatchesIn(root, rxOverride) {
         var rx = rxOverride || buildSearchRegex();
         if (!rx) return 0;
@@ -1241,39 +1247,67 @@
                 return NodeFilter.FILTER_ACCEPT;
             }
         });
-        var nodes = [];
+        // Concatenate the line's text nodes so the regex matches across the
+        // colorized <span> boundaries that split a single visual line.
+        var segs = [];   // { node, start, end } offsets into `joined`
+        var joined = '';
         var n;
-        while ((n = walker.nextNode())) nodes.push(n);
+        while ((n = walker.nextNode())) {
+            var t = n.nodeValue;
+            segs.push({ node: n, start: joined.length, end: joined.length + t.length });
+            joined += t;
+        }
+        if (!joined) return 0;
 
-        var count = 0;
-        for (var i = 0; i < nodes.length; i++) {
-            var textNode = nodes[i];
-            var text = textNode.nodeValue;
-            rx.lastIndex = 0;
-            var matches = [];
-            var m;
-            while ((m = rx.exec(text)) !== null) {
-                if (m[0].length === 0) { rx.lastIndex++; continue; }
-                matches.push([m.index, m.index + m[0].length]);
-            }
-            if (!matches.length) continue;
-            var parent = textNode.parentNode;
+        rx.lastIndex = 0;
+        var ranges = [];   // { s, e, id } over `joined`
+        var m;
+        while ((m = rx.exec(joined)) !== null) {
+            if (m[0].length === 0) { rx.lastIndex++; continue; }
+            ranges.push({ s: m.index, e: m.index + m[0].length, id: matchSeq++ });
+        }
+        if (!ranges.length) return 0;
+
+        // Rebuild each text node independently, wrapping the portion of every
+        // range that overlaps it. Offsets were captured up front, so replacing
+        // one node doesn't disturb the others.
+        for (var i = 0; i < segs.length; i++) {
+            var seg = segs[i];
+            var text = seg.node.nodeValue;
             var frag = document.createDocumentFragment();
             var last = 0;
-            for (var j = 0; j < matches.length; j++) {
-                var s = matches[j][0], e = matches[j][1];
-                if (s > last) frag.appendChild(document.createTextNode(text.slice(last, s)));
+            for (var j = 0; j < ranges.length; j++) {
+                var s = ranges[j].s, e = ranges[j].e;
+                if (e <= seg.start || s >= seg.end) continue; // no overlap
+                var ls = Math.max(s, seg.start) - seg.start;   // local to node
+                var le = Math.min(e, seg.end) - seg.start;
+                if (ls > last) frag.appendChild(document.createTextNode(text.slice(last, ls)));
                 var mk = document.createElement('mark');
                 mk.className = 'log-match';
-                mk.textContent = text.slice(s, e);
+                mk.setAttribute('data-mi', ranges[j].id);
+                mk.textContent = text.slice(ls, le);
                 frag.appendChild(mk);
-                last = e;
-                count++;
+                last = le;
             }
+            if (!last) continue; // no range touched this node
             if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
-            parent.replaceChild(frag, textNode);
+            seg.node.parentNode.replaceChild(frag, seg.node);
         }
-        return count;
+        return ranges.length;
+    }
+
+    // Group <mark> segments by logical match (data-mi), in DOM order, so the
+    // segments of a match that crosses colorized spans count and navigate as
+    // one unit.
+    function markGroups(marks) {
+        var order = [], byId = Object.create(null);
+        for (var i = 0; i < marks.length; i++) {
+            var id = marks[i].getAttribute('data-mi');
+            if (id === null) id = '_' + i;
+            if (!byId[id]) { byId[id] = []; order.push(id); }
+            byId[id].push(marks[i]);
+        }
+        return order.map(function(id) { return byId[id]; });
     }
 
     function refreshSearchCountLabel() {
@@ -1321,26 +1355,26 @@
     }
 
     function navigateMatch(delta, wrap) {
-        var marks = document.querySelectorAll('#modal-content mark.log-match');
-        if (!marks.length) return;
+        var groups = markGroups(document.querySelectorAll('#modal-content mark.log-match'));
+        if (!groups.length) return;
         var cur = -1;
-        for (var i = 0; i < marks.length; i++) {
-            if (marks[i].classList.contains('current')) { cur = i; break; }
+        for (var i = 0; i < groups.length; i++) {
+            if (groups[i][0].classList.contains('current')) { cur = i; break; }
         }
         var next;
         if (cur === -1) {
-            next = delta >= 0 ? 0 : marks.length - 1;
+            next = delta >= 0 ? 0 : groups.length - 1;
         } else {
             next = cur + delta;
             if (wrap !== false) {
-                next = ((next % marks.length) + marks.length) % marks.length;
+                next = ((next % groups.length) + groups.length) % groups.length;
             } else {
-                next = Math.max(0, Math.min(marks.length - 1, next));
+                next = Math.max(0, Math.min(groups.length - 1, next));
             }
-            marks[cur].classList.remove('current');
+            groups[cur].forEach(function(m) { m.classList.remove('current'); });
         }
-        marks[next].classList.add('current');
-        marks[next].scrollIntoView({ block: 'center', behavior: 'smooth' });
+        groups[next].forEach(function(m) { m.classList.add('current'); });
+        groups[next][0].scrollIntoView({ block: 'center', behavior: 'smooth' });
         searchState.currentIndex = next;
         refreshSearchCountLabel();
     }
@@ -1391,6 +1425,7 @@
         buildRegex: buildLogSearchRegex,
         clearMarks: clearSearchMarks,
         highlightIn: highlightMatchesIn,
+        markGroups: markGroups,
         lineHidden: lineSpanHidden
     };
 
@@ -2178,22 +2213,22 @@
             countEl.textContent = (st.currentIndex + 1) + ' / ' + st.matchCount;
         }
         function navigate(delta, wrap) {
-            var marks = outEl.querySelectorAll('mark.log-match');
-            if (!marks.length) return;
+            var groups = markGroups(outEl.querySelectorAll('mark.log-match'));
+            if (!groups.length) return;
             var cur = -1;
-            for (var i = 0; i < marks.length; i++) {
-                if (marks[i].classList.contains('current')) { cur = i; break; }
+            for (var i = 0; i < groups.length; i++) {
+                if (groups[i][0].classList.contains('current')) { cur = i; break; }
             }
             var nx;
-            if (cur === -1) nx = delta >= 0 ? 0 : marks.length - 1;
+            if (cur === -1) nx = delta >= 0 ? 0 : groups.length - 1;
             else {
                 nx = cur + delta;
-                if (wrap !== false) nx = ((nx % marks.length) + marks.length) % marks.length;
-                else nx = Math.max(0, Math.min(marks.length - 1, nx));
-                marks[cur].classList.remove('current');
+                if (wrap !== false) nx = ((nx % groups.length) + groups.length) % groups.length;
+                else nx = Math.max(0, Math.min(groups.length - 1, nx));
+                groups[cur].forEach(function(m) { m.classList.remove('current'); });
             }
-            marks[nx].classList.add('current');
-            marks[nx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+            groups[nx].forEach(function(m) { m.classList.add('current'); });
+            groups[nx][0].scrollIntoView({ block: 'center', behavior: 'smooth' });
             st.currentIndex = nx;
             refreshCount();
         }
