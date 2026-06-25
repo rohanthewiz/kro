@@ -2196,14 +2196,7 @@
         var st = { open: false, query: '', caseSensitive: false, wholeWord: false, regex: false, matchCount: 0, currentIndex: 0, invalidRegex: false };
 
         function buildRx() {
-            if (!st.query) return null;
-            var flags = st.caseSensitive ? 'g' : 'gi';
-            try {
-                if (st.regex) return new RegExp(st.query, flags);
-                var pat = st.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                if (st.wholeWord) pat = '\\b' + pat + '\\b';
-                return new RegExp(pat, flags);
-            } catch (_) { return false; }
+            return buildLogSearchRegex(st.query, st.caseSensitive, st.wholeWord, st.regex);
         }
         function refreshCount() {
             if (st.invalidRegex) { countEl.textContent = 'invalid regex'; countEl.classList.add('error'); return; }
