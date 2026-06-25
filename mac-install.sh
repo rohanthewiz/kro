@@ -402,6 +402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        applyAppIcon()
         buildWindow()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -422,6 +423,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    // The Cmd+Tab switcher and Dock render the running app's applicationIconImage,
+    // not the bundle's CFBundleIconFile directly. macOS caches that runtime icon by
+    // bundle id, so a re-installed bundle can keep showing a stale/generic icon there
+    // even when Finder and Spotlight already pick up the new KRo.icns. Setting the
+    // icon explicitly at launch bypasses that cache.
+    private func applyAppIcon() {
+        guard let iconURL = Bundle.main.url(forResource: "KRo", withExtension: "icns"),
+              let icon = NSImage(contentsOf: iconURL) else { return }
+        NSApp.applicationIconImage = icon
     }
 
     func applicationWillTerminate(_ notification: Notification) {
