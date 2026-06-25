@@ -48,7 +48,7 @@ func (h HeaderBar) Render(b *element.Builder) any {
 			b.Button("class", "btn-reconnect", "id", "btn-kubeconfig-merge", "onclick", "promptMergeKubeconfig()", "title", "Upload a kubeconfig file and merge its clusters, users, and contexts into your existing ~/.kube/config. Useful for combining access to multiple clusters without overwriting your current config. Existing entries are preserved on name conflict, and a timestamped backup of the current config is created first.").T("⇪ Add Kube Config"),
 			b.Span("id", "resources-sse-status", "class", "log-status disconnected").R(),
 			b.Button("class", "btn-reconnect", "onclick", "refreshResources()", "title", "Refresh").T("↻ Refresh"),
-			b.Button("class", "btn-dark-toggle", "id", "btn-dark-toggle", "onclick", "toggleDarkMode()").T("\U0001F319"),
+			b.Button("class", "btn-dark-toggle", "id", "btn-dark-toggle", "onclick", "toggleDarkMode()").T("☀️"),
 		),
 	)
 	return nil

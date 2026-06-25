@@ -41,7 +41,7 @@ live updates over SSE, no cluster-side install.
 - Resource sections organized behind left vertical tabs (Pods, Watch,
   Deployments, Networking, Storage, Sets, Config); sidebar collapses to an icon
   strip, with tab/collapse state persisted per browser.
-- Light and dark themes (defaults to light; 🌙/☀️ toggle, persisted per browser).
+- Dark and light themes (defaults to dark; ☀️/🌙 toggle, persisted per browser).
 
 ## Install
 

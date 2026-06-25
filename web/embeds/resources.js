@@ -4,12 +4,13 @@
     'use strict';
 
     // ===== Dark Mode =====
+    // Dark is the default; the body is rendered with the `dark` class server-side.
+    // Only an explicit opt-out (darkMode === 'false') switches to the light theme.
     function initDarkMode() {
-        if (localStorage.getItem('darkMode') === 'true') {
-            document.body.classList.add('dark');
-            var btn = document.getElementById('btn-dark-toggle');
-            if (btn) btn.textContent = '☀️';
-        }
+        var isDark = localStorage.getItem('darkMode') !== 'false';
+        document.body.classList.toggle('dark', isDark);
+        var btn = document.getElementById('btn-dark-toggle');
+        if (btn) btn.textContent = isDark ? '☀️' : '🌙';
     }
 
     window.toggleDarkMode = function() {

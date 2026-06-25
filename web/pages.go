@@ -40,7 +40,7 @@ func renderPage(buildNumber string) string {
 			b.Style().T(resourcesCSS),
 			b.Style().T(watchCSS),
 		),
-		b.Body().R(
+		b.Body("class", "dark").R(
 			b.DivClass("container").R(
 				HeaderBar{Title: "KRo", Version: buildNumber}.Render(b),
 
