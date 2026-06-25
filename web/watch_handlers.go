@@ -112,10 +112,17 @@ func (h *handlers) WatchSetMax(c rweb.Context) error {
 	return c.WriteJSON(map[string]int{"max": applied})
 }
 
-// WatchClear removes every ended (terminal) stream from every session's
-// list. Log files are kept.
+// WatchClear removes ended (terminal) streams from the session list. With an
+// empty body it clears every session; with {"context","namespace"} it clears
+// only that one session. Log files are kept.
 func (h *handlers) WatchClear(c rweb.Context) error {
-	return c.WriteJSON(map[string]int{"removed": h.mgr.ClearTerminal()})
+	var body watchSessionBody
+	if raw := c.Request().Body(); len(bytes.TrimSpace(raw)) > 0 {
+		if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&body); err != nil {
+			return writeJSONErr(c, http.StatusBadRequest, serr.Wrap(err, "invalid JSON"))
+		}
+	}
+	return c.WriteJSON(map[string]int{"removed": h.mgr.ClearTerminal(body.Context, body.Namespace)})
 }
 
 // WatchExport serves one stream's log file as a text download, flushing the

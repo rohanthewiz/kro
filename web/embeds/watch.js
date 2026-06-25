@@ -416,10 +416,27 @@
             return;
         }
 
+        // One block per session so namespaces stay visually isolated; each
+        // block carries its own Stop/Clear so a session can be torn down even
+        // when it isn't the current dropdown selection.
         var html = '';
         sessions.forEach(function(s) {
+            var isCurrent = s.context === sel.context && s.namespace === sel.namespace;
+            var sessAttrs = ' data-ctx="' + esc(s.context) + '" data-ns="' + esc(s.namespace) + '"';
+            html += '<div class="watch-session' + (isCurrent ? ' current' : '') + '">' +
+                '<div class="watch-session-head">' +
+                    '<span class="watch-session-ns" title="' + esc(s.context + ' / ' + s.namespace) + '">' +
+                        esc(s.namespace) + '</span>' +
+                    '<span class="watch-session-ctx">' + esc(s.context) + '</span>' +
+                    '<span style="flex:1"></span>' +
+                    '<button type="button" class="watch-btn" data-act="clear-session"' + sessAttrs +
+                        ' title="Remove this namespace\'s ended streams (log files are kept)">✕ Clear</button>' +
+                    '<button type="button" class="watch-btn stop" data-act="stop-session"' + sessAttrs +
+                        ' title="Stop watching ' + esc(s.context + ' / ' + s.namespace) + '">■ Stop</button>' +
+                '</div>';
             if (!s.streams || !s.streams.length) {
-                html += '<div class="watch-empty">Watching… no new pods yet. Existing pods are ignored by design.</div>';
+                html += '<div class="watch-empty">Watching… no new pods yet. Existing pods are ignored by design.</div>' +
+                    '</div>';
                 return;
             }
             s.streams.forEach(function(st) {
@@ -453,6 +470,7 @@
                     '<span class="actions">' + actions + '</span>' +
                 '</div>';
             });
+            html += '</div>';
         });
         list.innerHTML = html;
         reconcileFrames();
@@ -484,6 +502,10 @@
             toggleTee(ctx, ns, pod);
         } else if (act === 'export') {
             exportLog(ctx, ns, pod);
+        } else if (act === 'stop-session') {
+            watchStopSession(ctx, ns);
+        } else if (act === 'clear-session') {
+            clearStreams(ctx, ns);
         } else {
             streamAction(ctx, ns, pod, act);
         }
@@ -511,8 +533,11 @@
             .catch(function(err) { showNotice(err.message); });
     }
 
-    function clearStreams() {
-        postJSON('/api/watch/clear')
+    // Clears ended streams. With ctx/ns it's scoped to that one session
+    // (per-session Clear button); without, the toolbar button clears all.
+    function clearStreams(ctx, ns) {
+        var body = (ctx && ns) ? { context: ctx, namespace: ns } : {};
+        postJSON('/api/watch/clear', body)
             .then(function(res) {
                 showNotice(res.removed
                     ? 'Removed ' + res.removed + ' ended stream' + (res.removed === 1 ? '' : 's')
