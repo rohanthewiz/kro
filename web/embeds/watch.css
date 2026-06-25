@@ -223,6 +223,35 @@ body.watch-resizing { cursor: row-resize; user-select: none; }
 
 .watch-empty { color: #636e72; font-size: 13px; padding: 14px 8px; }
 
+/* Per-namespace group: keeps each watch session's streams visually isolated
+   and gives it its own Stop / Clear controls. */
+.watch-session { margin-bottom: 10px; }
+.watch-session:last-child { margin-bottom: 0; }
+.watch-session.current { }
+
+.watch-session-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    border-bottom: 1px solid #e0e0e0;
+    border-left: 3px solid #b2bec3;
+    margin-bottom: 2px;
+}
+.watch-session.current .watch-session-head { border-left-color: #0984e3; }
+
+.watch-session-ns {
+    font-family: 'Monaco', 'Courier New', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: #2d3436;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.watch-session-ctx { color: #636e72; font-size: 11px; flex: none; }
+.watch-session-head .watch-btn { padding: 2px 8px; font-size: 11px; flex: none; }
+
 .watch-row {
     display: flex;
     align-items: center;
@@ -442,6 +471,10 @@ body.dark .watch-btn.primary { background: #0984e3; border-color: #0984e3; color
 body.dark .watch-btn.stop { background: #7b241c; border-color: #7b241c; color: #fff; }
 body.dark .watch-btn.stop:hover:not(:disabled) { background: #922b21; border-color: #922b21; color: #fff; }
 body.dark .watch-row:hover { background: rgba(84, 160, 255, 0.10); }
+body.dark .watch-session-head { border-color: #4a5568; border-left-color: #636e72; }
+body.dark .watch-session.current .watch-session-head { border-left-color: #54a0ff; }
+body.dark .watch-session-ns { color: #dfe6e9; }
+body.dark .watch-session-ctx { color: #8395a7; }
 body.dark .watch-frame {
     border-color: #4a5568;
     background: rgba(30, 39, 46, 0.7);

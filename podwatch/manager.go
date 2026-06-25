@@ -162,11 +162,17 @@ func (m *Manager) SetMaxStreams(n int) int {
 func (m *Manager) maxStreamsNow() int { return int(m.maxStreams.Load()) }
 
 // ClearTerminal removes every terminal (completed|stopped|error) stream from
-// every session's list. Log files are kept. Returns how many were removed.
-func (m *Manager) ClearTerminal() int {
+// the session list. When ctxName and ns are both non-empty it is scoped to
+// that one session; otherwise every session is cleared. Log files are kept.
+// Returns how many streams were removed.
+func (m *Manager) ClearTerminal(ctxName, ns string) int {
+	scoped := ctxName != "" && ns != ""
 	m.mu.Lock()
 	n := 0
-	for _, sess := range m.sessions {
+	for key, sess := range m.sessions {
+		if scoped && key != sessKey(ctxName, ns) {
+			continue
+		}
 		for pod, st := range sess.streams {
 			st.mu.Lock()
 			terminal := st.state.terminal()
