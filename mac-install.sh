@@ -199,7 +199,7 @@ install_go_local() {
   printf '    %s%s%s\n' "$C_DIM" "$url" "$C_RESET"
 
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
   tarball="$tmp/go.tar.gz"
 
   download "$url" "$tarball"
@@ -236,7 +236,7 @@ build_kro() {
 build_app_icon() {
   local resources="$1" tmp icon_swift icon_bin iconset
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
   icon_swift="$tmp/MakeIcon.swift"
   icon_bin="$tmp/makeicon"
   iconset="$tmp/KRo.iconset"
