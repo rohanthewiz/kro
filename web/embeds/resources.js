@@ -827,7 +827,45 @@
         var escaped = escapeHtml(line);
         var detected = null;
         var isError = /\blevel=(error|err|fatal)\b/i.test(line) ||
+                      /"level"\s*:\s*"(error|err|fatal)"/i.test(line) ||
                       /\b(ERROR|FATAL)\b/.test(line);
+
+        // logrus/zerolog JSON lines ({"level":"error","msg":"...",...}) need
+        // their own pass — the logfmt regex below only recognizes key=value and
+        // bare level tokens, so JSON level/keys would never be colorized.
+        var trimmed = (line || '').replace(/^\s+/, '');
+        if (trimmed.charAt(0) === '{' && /&quot;[\w.\-]+&quot;\s*:/.test(escaped)) {
+            // value := quoted string | number | true/false/null
+            var jsonRe = /(&quot;[\w.\-]+&quot;)(\s*:\s*)(&quot;(?:[^&]|&(?!quot;))*?&quot;|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)/g;
+            var jsonOut = escaped.replace(jsonRe, function(m, keyTok, sep, val) {
+                var keyName = keyTok.replace(/&quot;/g, '');
+                var keyHtml = '<span class="log-key">' + keyTok + '</span>';
+                var valHtml;
+                if (val === 'true' || val === 'false') {
+                    valHtml = '<span class="log-bool log-bool-' + val + '">' + val + '</span>';
+                } else if (val === 'null') {
+                    valHtml = val;
+                } else if (/^-\d/.test(val)) {
+                    valHtml = '<span class="log-num-neg">' + val + '</span>';
+                } else if (/^\d/.test(val)) {
+                    valHtml = '<span class="log-num">' + val + '</span>';
+                } else {
+                    // quoted string value — strip the &quot; wrappers (6 chars each)
+                    var inner = val.slice(6, -6);
+                    if (keyName === 'level') {
+                        if (!detected) detected = LEVEL_BUCKETS[inner.toLowerCase()] || null;
+                        valHtml = '<span class="' + levelTokenClass(inner) + '">' + val + '</span>';
+                    } else if (isError && (keyName === 'msg' || keyName === 'error' || keyName === 'err')) {
+                        valHtml = '<span class="log-msg-err">' + val + '</span>';
+                    } else {
+                        valHtml = highlightInner(val);
+                    }
+                }
+                return keyHtml + sep + valHtml;
+            });
+            highlightLogLine.lastLevel = detected;
+            return jsonOut;
+        }
 
         // Order matters: date/time alts come before bare numbers so a date's
         // digit groups aren't picked off as standalone numbers, and longer
