@@ -69,7 +69,7 @@ func (m *Manager) runStream(sess *Session, st *Stream, ctx context.Context, sinc
 	done := make(chan error, 1)
 	go func() {
 		done <- kube.StreamPodLogsOpts(ctx, sess.client, sess.Namespace, st.Pod,
-			kube.StreamOpts{SinceTime: since, ReadyTimeout: readyTimeout}, lines)
+			kube.StreamOpts{SinceTime: since, ReadyTimeout: m.readyTimeout}, lines)
 	}()
 
 	flush := time.NewTicker(flushInterval)

@@ -111,6 +111,7 @@ Requires Go 1.26+.
 | `KRO_STATE_FILE`    | `os.UserConfigDir()/kro/state.json`  | Pinned-namespaces JSON file              |
 | `KRO_WATCH_LOG_DIR` | `os.UserConfigDir()/kro/watch-logs`  | Pod Watch per-pod log files directory    |
 | `KRO_WATCH_LOG_RETENTION_DAYS` | `7`                       | Auto-delete watch logs older than this (`0` disables) |
+| `KRO_POD_READY_TIMEOUT` | `10m`                            | How long Pod Watch waits for a new pod's logs to become available before flagging the stream (Go duration, e.g. `7m30s`); raise it for pods that are slow to start |
 
 ## Layout
 

@@ -27,12 +27,12 @@ const (
 	defaultMaxStreams = 10
 	absMaxStreams     = 100
 
-	ringLines      = 2000 // per-stream replay buffer for console tees
-	subChanSize    = 256  // per-tee subscriber channel buffer
-	lineChanSize   = 256  // kube log line channel buffer
-	flushInterval  = 2 * time.Second
-	countsInterval = 2 * time.Second
-	readyTimeout   = 2 * time.Minute // how long to wait for a new pod's logs
+	ringLines           = 2000 // per-stream replay buffer for console tees
+	subChanSize         = 256  // per-tee subscriber channel buffer
+	lineChanSize        = 256  // kube log line channel buffer
+	flushInterval       = 2 * time.Second
+	countsInterval      = 2 * time.Second
+	defaultReadyTimeout = 10 * time.Minute // default wait for a new pod's logs; override via config (KRO_POD_READY_TIMEOUT)
 )
 
 // Sentinel errors mapped to HTTP statuses by the web layer.
@@ -66,9 +66,10 @@ func (s StreamState) terminal() bool {
 
 // Manager coordinates watch sessions. One session per (context, namespace).
 type Manager struct {
-	logDir    string
-	clientFn  func(ctxName string) (*kubernetes.Clientset, error)
-	retention time.Duration // auto-clean age; written once by StartJanitor before serving
+	logDir       string
+	clientFn     func(ctxName string) (*kubernetes.Clientset, error)
+	retention    time.Duration // auto-clean age; written once by StartJanitor before serving
+	readyTimeout time.Duration // wait for a new pod's logs; written once before serving (SetReadyTimeout)
 
 	maxStreams atomic.Int64 // cap on active streams; see SetMaxStreams
 
@@ -141,9 +142,10 @@ type StatusPayload struct {
 
 func NewManager(clientFn func(string) (*kubernetes.Clientset, error), logDir string) *Manager {
 	m := &Manager{
-		logDir:   logDir,
-		clientFn: clientFn,
-		sessions: map[string]*Session{},
+		logDir:       logDir,
+		clientFn:     clientFn,
+		sessions:     map[string]*Session{},
+		readyTimeout: defaultReadyTimeout,
 	}
 	m.maxStreams.Store(defaultMaxStreams)
 	return m
@@ -160,6 +162,15 @@ func (m *Manager) SetMaxStreams(n int) int {
 }
 
 func (m *Manager) maxStreamsNow() int { return int(m.maxStreams.Load()) }
+
+// SetReadyTimeout overrides how long a new stream waits for a pod's logs to
+// become available before giving up. Non-positive values are ignored (the
+// default is kept). Call once at startup, before any streams start.
+func (m *Manager) SetReadyTimeout(d time.Duration) {
+	if d > 0 {
+		m.readyTimeout = d
+	}
+}
 
 // ClearTerminal removes every terminal (completed|stopped|error) stream from
 // the session list. When ctxName and ns are both non-empty it is scoped to
