@@ -30,18 +30,36 @@ func watchErrStatus(err error) int {
 	}
 }
 
-// WatchStart begins watching the cookie-selected (context, namespace) for
-// newly created pods. The session is bound to that selection at start time.
+// WatchStart begins watching a (context, namespace) for newly created pods.
+// The body may name the target explicitly ({"context","namespace"}) so the
+// watch is independent of the current selection; an empty or partial body
+// falls back to the cookie selection. The session is bound to the resolved
+// (context, namespace) at start time.
 func (h *handlers) WatchStart(c rweb.Context) error {
-	sel, err := h.resolve(c)
-	if err != nil {
-		return writeJSONErr(c, http.StatusServiceUnavailable, err)
+	var body watchSessionBody
+	if raw := c.Request().Body(); len(bytes.TrimSpace(raw)) > 0 {
+		if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&body); err != nil {
+			return writeJSONErr(c, http.StatusBadRequest, serr.Wrap(err, "invalid JSON"))
+		}
 	}
-	sess, err := h.mgr.Start(sel.Context, sel.Namespace)
+	ctxName, ns := body.Context, body.Namespace
+	if ctxName == "" || ns == "" {
+		sel, err := h.resolve(c)
+		if err != nil {
+			return writeJSONErr(c, http.StatusServiceUnavailable, err)
+		}
+		if ctxName == "" {
+			ctxName = sel.Context
+		}
+		if ns == "" {
+			ns = sel.Namespace
+		}
+	}
+	sess, err := h.mgr.Start(ctxName, ns)
 	if err != nil {
 		return writeJSONErr(c, watchErrStatus(err), err)
 	}
-	logger.InfoF("pod watch started for %s/%s", sel.Context, sel.Namespace)
+	logger.InfoF("pod watch started for %s/%s", ctxName, ns)
 	return c.WriteJSON(sess)
 }
 

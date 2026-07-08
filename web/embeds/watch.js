@@ -121,6 +121,7 @@
         return Math.floor(s / 3600) + 'h ago';
     }
 
+    // The global context/namespace dropdowns (shared with the Resources view).
     function currentSelection() {
         var ctxSel = document.getElementById('ctx-select');
         var nsSel = document.getElementById('ns-select');
@@ -128,6 +129,54 @@
             context: ctxSel ? ctxSel.value : '',
             namespace: nsSel ? nsSel.value : ''
         };
+    }
+
+    // The namespace the Start/Stop buttons act on: the current context plus
+    // the watch page's own namespace picker, so a watch can be started for any
+    // namespace without disturbing the global selection.
+    function watchTarget() {
+        var ctxSel = document.getElementById('ctx-select');
+        var nsSel = document.getElementById('watch-ns-select');
+        return {
+            context: ctxSel ? ctxSel.value : '',
+            namespace: nsSel ? nsSel.value : ''
+        };
+    }
+
+    // Populate the watch namespace picker from the pinned namespaces of the
+    // current context. Keeps the current pick if it still exists, else falls
+    // back to the global namespace, else the first entry.
+    function loadWatchNamespaces() {
+        var sel = document.getElementById('watch-ns-select');
+        if (!sel) return Promise.resolve();
+        return fetch('/api/namespaces')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var list = data.namespaces || [];
+                var prev = sel.value;
+                sel.innerHTML = '';
+                list.forEach(function(n) {
+                    var opt = document.createElement('option');
+                    opt.value = n;
+                    opt.textContent = n;
+                    sel.appendChild(opt);
+                });
+                if (!list.length) {
+                    var opt = document.createElement('option');
+                    opt.value = '';
+                    opt.textContent = '— no namespaces —';
+                    opt.disabled = true;
+                    sel.appendChild(opt);
+                    sel.value = '';
+                } else {
+                    var want = (prev && list.indexOf(prev) >= 0) ? prev
+                        : (data.current && list.indexOf(data.current) >= 0) ? data.current
+                        : list[0];
+                    sel.value = want;
+                }
+                renderStatus();
+            })
+            .catch(function() {});
     }
 
     // ===== Page shell =====
@@ -168,6 +217,7 @@
                         '0 = all. Files of streams still listed above are always kept.</div>' +
                 '</div>' +
                 '<div class="watch-controls">' +
+                    '<select class="watch-ns-select" id="watch-ns-select" title="Namespace to watch (independent of the current selection)"></select>' +
                     '<button type="button" class="watch-btn primary" id="watch-start">▶ Start Watch</button>' +
                     '<button type="button" class="watch-btn stop" id="watch-stop" disabled>■ Stop Watch</button>' +
                     '<span class="watch-notice" id="watch-notice"></span>' +
@@ -194,9 +244,11 @@
 
         document.getElementById('watch-start').addEventListener('click', watchStart);
         document.getElementById('watch-stop').addEventListener('click', function() {
-            var sel = currentSelection();
-            watchStopSession(sel.context, sel.namespace);
+            var t = watchTarget();
+            watchStopSession(t.context, t.namespace);
         });
+        // Changing the picked namespace re-syncs the Start/Stop enable state.
+        document.getElementById('watch-ns-select').addEventListener('change', renderStatus);
         document.getElementById('watch-clear').addEventListener('click', clearStreams);
         document.getElementById('watch-gear').addEventListener('click', toggleSettings);
         document.getElementById('watch-settings-close').addEventListener('click', function() {
@@ -303,6 +355,9 @@
         document.getElementById('watch-buf-input').value = getWatchBufLines();
         document.getElementById('watch-frames-input').value = getMaxFrames();
         document.getElementById('watch-slider-max').value = getSliderMax();
+        // Refresh the namespace picker: the context may have changed while the
+        // Watch tab was hidden.
+        loadWatchNamespaces();
         fetchWatchStatus();
         connectStatusSSE();
     };
@@ -380,7 +435,7 @@
 
     function renderStatus() {
         if (!lastStatus) return;
-        var sel = currentSelection();
+        var sel = watchTarget();
         var sessions = lastStatus.sessions || [];
 
         document.getElementById('watch-count').textContent =
@@ -528,7 +583,9 @@
     }
 
     function watchStart() {
-        postJSON('/api/watch/start')
+        var t = watchTarget();
+        if (!t.namespace) { showNotice('Pick a namespace to watch'); return; }
+        postJSON('/api/watch/start', { context: t.context, namespace: t.namespace })
             .then(fetchWatchStatus)
             .catch(function(err) { showNotice(err.message); });
     }

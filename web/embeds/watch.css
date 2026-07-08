@@ -182,6 +182,18 @@
     cursor: pointer;
     color: #2d3436;
 }
+.watch-ns-select {
+    border: 1px solid #b2bec3;
+    background: #fff;
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 12.5px;
+    color: #2d3436;
+    max-width: 220px;
+    cursor: pointer;
+}
+.watch-ns-select:hover { border-color: #0984e3; }
+
 .watch-btn:hover { border-color: #0984e3; color: #0984e3; }
 .watch-btn.primary { background: #0984e3; border-color: #0984e3; color: #fff; }
 .watch-btn.primary:hover { background: #0b6fc2; color: #fff; }
@@ -467,6 +479,12 @@ body.dark .watch-btn {
     color: #dfe6e9;
 }
 body.dark .watch-btn:hover { border-color: #54a0ff; color: #54a0ff; }
+body.dark .watch-ns-select {
+    background: #2d3436;
+    border-color: #636e72;
+    color: #dfe6e9;
+}
+body.dark .watch-ns-select:hover { border-color: #54a0ff; }
 body.dark .watch-btn.primary { background: #0984e3; border-color: #0984e3; color: #fff; }
 body.dark .watch-btn.stop { background: #7b241c; border-color: #7b241c; color: #fff; }
 body.dark .watch-btn.stop:hover:not(:disabled) { background: #922b21; border-color: #922b21; color: #fff; }
