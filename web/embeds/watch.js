@@ -291,6 +291,7 @@
 
         document.getElementById('watch-fs').addEventListener('click', function() {
             page.classList.toggle('fullscreen');
+            sizeWatchPage();
         });
         document.getElementById('watch-logs-fs').addEventListener('click', function() {
             document.getElementById('watch-lower').classList.toggle('fullscreen');
@@ -302,11 +303,30 @@
                 lower.classList.remove('fullscreen');
             } else if (page.classList.contains('fullscreen')) {
                 page.classList.remove('fullscreen');
+                sizeWatchPage();
             }
         });
 
         initSplitter();
         renderFramesVisibility();
+        window.addEventListener('resize', sizeWatchPage);
+    }
+
+    // Size the pane to fill the viewport below its on-page position. The
+    // stylesheet's calc(100vh - 250px) is only a pre-JS fallback; the chrome
+    // above the pane (header, summary bar) varies, so measure it instead.
+    function sizeWatchPage() {
+        var page = document.getElementById('watch-page');
+        if (!page || !pageBuilt) return;
+        // Fullscreen mode owns the height; an inline height would override it.
+        if (page.classList.contains('fullscreen')) {
+            page.style.height = '';
+            return;
+        }
+        if (!page.offsetParent) return; // watch tab hidden
+        var top = page.getBoundingClientRect().top + window.scrollY;
+        // 20px matches the body's bottom padding.
+        page.style.height = Math.max(420, window.innerHeight - top - 20) + 'px';
     }
 
     // Splitter between the stream list and the console frames: dragging sets
@@ -349,6 +369,7 @@
     window.watchPageActivate = function() {
         if (!pageBuilt) buildWatchPage();
         if (!pageBuilt) return; // panel missing from the DOM
+        sizeWatchPage();
         var sel = currentSelection();
         document.getElementById('watch-title-sub').textContent =
             sel.context && sel.namespace ? sel.context + ' / ' + sel.namespace : '';

@@ -6,6 +6,8 @@
     position: relative; /* anchors the settings popover */
     display: flex;
     flex-direction: column;
+    /* Pre-JS fallback only: sizeWatchPage() (watch.js) measures the pane's
+       actual top offset and sets an inline height filling the viewport. */
     height: calc(100vh - 250px);
     min-height: 420px;
     background: rgba(255, 255, 255, 0.8);
