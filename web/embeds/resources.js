@@ -790,7 +790,7 @@
                 refreshSearchCountLabel();
             }
         }
-        if (atBottom && body) body.scrollTop = body.scrollHeight;
+        if (atBottom && body && !selectionActiveIn(content)) body.scrollTop = body.scrollHeight;
     }
 
     // Map any recognized level token onto the five filter buckets. Covers the
@@ -933,6 +933,18 @@
     // Shared with watch.js (the Pod Watch modal) so its console frames get
     // the same log colorization. highlightLogLine HTML-escapes internally.
     window.kroHighlight = highlightLogLine;
+
+    // True when the user has a non-collapsed text selection anchored inside
+    // el. Streaming panes check this before autoscrolling or trimming old
+    // lines — either one destroys an in-progress selection, making it
+    // impossible to copy from a busy stream.
+    function selectionActiveIn(el) {
+        var sel = window.getSelection ? window.getSelection() : null;
+        if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+        var n = sel.anchorNode;
+        return !!(n && el && el.contains(n));
+    }
+    window.kroSelActive = selectionActiveIn;
 
     // ===== Log level filter =====
     // Each line span is tagged lvl-<bucket> at render time; hiding a level is
@@ -2367,8 +2379,11 @@
         if (ctl) {
             for (var j = 0; j < newSpans.length; j++) ctl.onAppend(newSpans[j]);
         }
-        termTrimToLimit();
-        if (atBottom) out.scrollTop = out.scrollHeight;
+        // Trimming or autoscrolling would wipe a selection the user is trying
+        // to copy; hold both while one is active anywhere in the terminal.
+        var holdForSelection = selectionActiveIn(termBlocks);
+        if (!holdForSelection) termTrimToLimit();
+        if (atBottom && !holdForSelection) out.scrollTop = out.scrollHeight;
     }
 
     function termFinalize(block, exitCode, canceled) {

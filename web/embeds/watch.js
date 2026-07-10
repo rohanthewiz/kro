@@ -1000,6 +1000,9 @@
 
         var body = frame.body;
         var atBottom = (body.scrollHeight - body.scrollTop - body.clientHeight) < 30;
+        // Trimming or autoscrolling would wipe a selection the user is trying
+        // to copy from this frame; hold both while one is active.
+        var holdForSelection = window.kroSelActive && window.kroSelActive(body);
 
         var frag = document.createDocumentFragment();
         var newSpans = [];
@@ -1023,7 +1026,7 @@
             newSpans.push(span);
         }
         body.appendChild(frag);
-        trimFrame(frame);
+        if (!holdForSelection) trimFrame(frame);
 
         // Keep an active search in step with streamed lines: mark matches in
         // the new spans, then recount from the DOM (trimming may also have
@@ -1041,7 +1044,7 @@
                 refreshFrameSearchCount(frame);
             }
         }
-        if (atBottom) body.scrollTop = body.scrollHeight;
+        if (atBottom && !holdForSelection) body.scrollTop = body.scrollHeight;
     }
 
     function trimFrame(frame) {
