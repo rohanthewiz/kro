@@ -11,6 +11,7 @@ import (
 
 	"github.com/rohanthewiz/serr"
 	coreV1 "k8s.io/api/core/v1"
+	apiErrors "k8s.io/apimachinery/pkg/api/errors"
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -21,7 +22,13 @@ const streamTailLines int64 = 500
 // per-container Stream calls while ReadyTimeout has not elapsed. New pods race
 // their own log availability: an ADDED watch event fires while the pod is
 // still Pending, when GetLogs would fail with "container is waiting to start".
+// It is also the delay before reconnecting an established follow that the
+// server ended while the container is still running.
 const streamRetryInterval = 2 * time.Second
+
+// lastCrashSlack absorbs node-vs-local clock skew when deciding whether a
+// container's LastTerminationState predates the follow that just ended.
+const lastCrashSlack = 30 * time.Second
 
 // LogLine is one line of streamed pod log output. Container is empty for
 // single-container pods; for multi-container pods it is set so callers can
@@ -47,8 +54,11 @@ type StreamOpts struct {
 
 // StreamPodLogs follows logs for every container in the named pod and
 // delivers each line on out. It returns when ctx is cancelled or every
-// container's stream has ended (e.g., the pod terminated). Callers cancel
-// ctx to stop streaming early.
+// container has actually finished (the pod terminated or was deleted). A
+// follow the server ends while its container is still running — kubelet log
+// rotation, proxy idle timeouts, apiserver connection recycling — is
+// reconnected transparently, resuming just after the last delivered line.
+// Callers cancel ctx to stop streaming early.
 func StreamPodLogs(ctx context.Context, client *kubernetes.Clientset, ns, name string, out chan<- LogLine) error {
 	tail := streamTailLines
 	return StreamPodLogsOpts(ctx, client, ns, name, StreamOpts{TailLines: &tail}, out)
@@ -110,32 +120,62 @@ func StreamPodLogsOpts(ctx context.Context, client *kubernetes.Clientset, ns, na
 // out. While the container is still coming up it retries until the ReadyTimeout
 // deadline. If the container is in a crash/error state it captures the previous
 // (crashed) instance's logs once and returns an error describing the failure.
-// Returns nil on a clean end (the container's log stream closed normally) or
-// when ctx is cancelled (pause/stop).
+//
+// The server ends long-lived follows routinely (kubelet log rotation, proxy
+// idle timeouts, apiserver connection recycling), so an EOF while the container
+// is still running is not the end: the follow is reconnected with SinceTime set
+// to the last delivered line's timestamp, and the sub-second overlap the API's
+// 1s SinceTime granularity replays is dropped by timestamp comparison. Logs are
+// requested with Timestamps=true to make that resume point exact; the prefix is
+// stripped before lines are delivered.
+//
+// Returns nil on a clean end (the container actually finished) or when ctx is
+// cancelled (pause/stop).
 func streamContainerLogs(ctx context.Context, client *kubernetes.Clientset, ns, name, cname, tag string, opts StreamOpts, deadline time.Time, out chan<- LogLine) error {
 	prevCaptured := false
+	connected := false
+	var lastTS time.Time // timestamp of the last delivered line; reconnects resume just after it
+	tail, since := opts.TailLines, opts.SinceTime
+
 	for {
 		req := client.CoreV1().Pods(ns).GetLogs(name, &coreV1.PodLogOptions{
-			Container: cname,
-			TailLines: opts.TailLines,
-			SinceTime: opts.SinceTime,
-			Follow:    true,
+			Container:  cname,
+			TailLines:  tail,
+			SinceTime:  since,
+			Timestamps: true,
+			Follow:     true,
 		})
+		followStart := time.Now()
 		stream, sErr := req.Stream(ctx)
 		if sErr == nil {
-			copyStream(ctx, stream, tag, out)
+			connected = true
+			if ts := copyTimestampedStream(ctx, stream, tag, lastTS, out); !ts.IsZero() {
+				lastTS = ts
+			}
 			stream.Close()
-			// The follow ended: the container exited or was restarted. If the
-			// run we just followed ended in a crash, surface it so the stream
-			// is flagged. afterFollow=true also consults LastTerminationState,
-			// since a fast restart moves the exit code there.
+			// The follow ended: the container exited, was restarted, or the
+			// server severed the connection. If the run we just followed ended
+			// in a crash, surface it so the stream is flagged; followStart also
+			// makes containerProblem consult LastTerminationState, since a fast
+			// restart moves the exit code there.
 			if ctx.Err() != nil {
 				return nil
 			}
-			if reason, msg := containerProblem(ctx, client, ns, name, cname, true); reason != "" {
+			if reason, msg := containerProblem(ctx, client, ns, name, cname, followStart); reason != "" {
 				return fmt.Errorf("container %q %s: %s", cname, reason, msg)
 			}
-			return nil
+			if !containerStillRunning(ctx, client, ns, name, cname) {
+				return nil
+			}
+			// Server-side disconnect of a live container: reconnect and resume.
+			if !lastTS.IsZero() {
+				t := metaV1.NewTime(lastTS.Truncate(time.Second))
+				since, tail = &t, nil
+			}
+			if !sleepCtx(ctx, streamRetryInterval) {
+				return nil
+			}
+			continue
 		}
 
 		// Stream() failed. Decide whether the container is merely still starting
@@ -143,12 +183,25 @@ func streamContainerLogs(ctx context.Context, client *kubernetes.Clientset, ns, 
 		if ctx.Err() != nil {
 			return nil
 		}
-		if reason, msg := containerProblem(ctx, client, ns, name, cname, false); reason != "" {
+		if reason, msg := containerProblem(ctx, client, ns, name, cname, time.Time{}); reason != "" {
 			if !prevCaptured {
 				emitPreviousLogs(ctx, client, ns, name, cname, tag, out)
 				prevCaptured = true
 			}
 			return fmt.Errorf("container %q %s: %s", cname, reason, msg)
+		}
+
+		if connected {
+			// Reconnect of an established follow failed. ReadyTimeout only
+			// governs initial startup: stop cleanly if the pod is gone,
+			// otherwise keep retrying until cancelled.
+			if apiErrors.IsNotFound(sErr) {
+				return nil
+			}
+			if !sleepCtx(ctx, streamRetryInterval) {
+				return nil
+			}
+			continue
 		}
 
 		// Still starting up (or a transient API error): wait and retry.
@@ -172,6 +225,44 @@ func copyStream(ctx context.Context, stream io.ReadCloser, tag string, out chan<
 			return
 		}
 	}
+}
+
+// copyTimestampedStream scans a Timestamps=true log stream, strips the leading
+// RFC3339Nano timestamp from each line, and delivers the rest on out until EOF
+// or ctx cancellation. Lines stamped at or before skipThrough are dropped:
+// they are the sub-second overlap a reconnect's SinceTime (1s granularity)
+// replays. Returns the timestamp of the last line seen (zero if none) — the
+// resume point for the next reconnect. A line without a parseable timestamp
+// is delivered as-is and does not advance the resume point.
+func copyTimestampedStream(ctx context.Context, stream io.ReadCloser, tag string, skipThrough time.Time, out chan<- LogLine) time.Time {
+	var last time.Time
+	scanner := bufio.NewScanner(stream)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimRight(scanner.Text(), "\r")
+		if ts, rest, ok := splitLogTimestamp(line); ok {
+			if !ts.After(skipThrough) {
+				continue
+			}
+			last, line = ts, rest
+		}
+		if !sendLine(ctx, out, LogLine{Container: tag, Line: line}) {
+			return last
+		}
+	}
+	return last
+}
+
+// splitLogTimestamp splits a Timestamps=true log line into its leading
+// RFC3339Nano timestamp and the rest of the line. ok is false when the line
+// does not start with a parseable timestamp.
+func splitLogTimestamp(line string) (ts time.Time, rest string, ok bool) {
+	tsStr, rest, _ := strings.Cut(line, " ")
+	t, err := time.Parse(time.RFC3339Nano, tsStr)
+	if err != nil {
+		return time.Time{}, line, false
+	}
+	return t, rest, true
 }
 
 // emitPreviousLogs delivers the logs of the container's previous (terminated)
@@ -199,11 +290,15 @@ func emitPreviousLogs(ctx context.Context, client *kubernetes.Clientset, ns, nam
 // or still legitimately starting up. Both init and regular containers are
 // searched. A Get failure is treated as "no problem" so a transient API error
 // does not masquerade as a container failure.
-// containerProblem fetches the pod and classifies the named container's state.
-// When afterFollow is true (a live follow just ended) it also consults
-// LastTerminationState, so a crash that a fast restart has already superseded is
-// still reported; a pod that is merely being deleted reads as no problem.
-func containerProblem(ctx context.Context, client *kubernetes.Clientset, ns, name, cname string, afterFollow bool) (reason, message string) {
+//
+// followStart, when non-zero, marks that a live follow that began at that time
+// just ended: LastTerminationState is consulted too (a fast restart moves the
+// exit code there), but only for terminations that finished after the follow
+// began — an older crash predates the run we followed and is not re-reported
+// on every server-side disconnect. A pod that is merely being deleted reads as
+// no problem.
+func containerProblem(ctx context.Context, client *kubernetes.Clientset, ns, name, cname string, followStart time.Time) (reason, message string) {
+	afterFollow := !followStart.IsZero()
 	pod, err := client.CoreV1().Pods(ns).Get(ctx, name, metaV1.GetOptions{})
 	if err != nil {
 		return "", ""
@@ -213,15 +308,17 @@ func containerProblem(ctx context.Context, client *kubernetes.Clientset, ns, nam
 	}
 	statuses := append([]coreV1.ContainerStatus{}, pod.Status.InitContainerStatuses...)
 	statuses = append(statuses, pod.Status.ContainerStatuses...)
-	return classifyContainer(statuses, cname, afterFollow)
+	return classifyContainer(statuses, cname, afterFollow, followStart)
 }
 
 // classifyContainer is the pure classification behind containerProblem: given a
 // pod's container statuses, it returns the crash/error reason and message for
 // the named container, or "", "" when it is healthy or still starting up. When
-// includeLast is true the container's last terminated instance (the run that
-// just ended) is considered as well as its current state.
-func classifyContainer(statuses []coreV1.ContainerStatus, cname string, includeLast bool) (reason, message string) {
+// includeLast is true the container's last terminated instance is considered
+// as well as its current state — but a last termination that finished before
+// crashesSince (less lastCrashSlack for clock skew) is ignored as stale; a
+// zero crashesSince keeps every last termination.
+func classifyContainer(statuses []coreV1.ContainerStatus, cname string, includeLast bool, crashesSince time.Time) (reason, message string) {
 	for _, cs := range statuses {
 		if cs.Name != cname {
 			continue
@@ -233,13 +330,37 @@ func classifyContainer(statuses []coreV1.ContainerStatus, cname string, includeL
 			return r, m
 		}
 		if includeLast {
-			if r, m, ok := terminatedProblem(cs.LastTerminationState.Terminated); ok {
+			t := cs.LastTerminationState.Terminated
+			if t != nil && !crashesSince.IsZero() && t.FinishedAt.Time.Before(crashesSince.Add(-lastCrashSlack)) {
+				t = nil // stale: predates the follow that just ended
+			}
+			if r, m, ok := terminatedProblem(t); ok {
 				return r, m
 			}
 		}
 		return "", ""
 	}
 	return "", ""
+}
+
+// containerStillRunning reports whether the named container is currently
+// running (or legitimately coming back up), meaning an ended follow should
+// reconnect rather than complete. A pod that is gone, mid-deletion, or
+// unreadable reads as not running so the stream completes.
+func containerStillRunning(ctx context.Context, client *kubernetes.Clientset, ns, name, cname string) bool {
+	pod, err := client.CoreV1().Pods(ns).Get(ctx, name, metaV1.GetOptions{})
+	if err != nil || pod.DeletionTimestamp != nil {
+		return false
+	}
+	statuses := append([]coreV1.ContainerStatus{}, pod.Status.InitContainerStatuses...)
+	statuses = append(statuses, pod.Status.ContainerStatuses...)
+	for _, cs := range statuses {
+		if cs.Name == cname {
+			return cs.State.Running != nil ||
+				(cs.State.Waiting != nil && isStartupReason(cs.State.Waiting.Reason))
+		}
+	}
+	return false
 }
 
 // terminatedProblem reports the reason/message for a Terminated state that
