@@ -43,6 +43,7 @@
     margin-top: 5px;
     z-index: 60;
     display: none;
+    width: max-content;
     max-width: 460px;
     white-space: normal;
     padding: 6px 10px;
