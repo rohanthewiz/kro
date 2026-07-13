@@ -16,6 +16,9 @@ var headerCSS string
 type HeaderBar struct {
 	Title   string
 	Version string
+	// VersionMessage is the top line of the build commit's message. When set,
+	// hovering the version hash reveals it in a small popup.
+	VersionMessage string
 }
 
 func (h HeaderBar) Render(b *element.Builder) any {
@@ -23,9 +26,18 @@ func (h HeaderBar) Render(b *element.Builder) any {
 		b.H1().R(
 			b.Text(h.Title),
 			b.Wrap(func() {
-				if h.Version != "" {
-					b.Span("class", "version-label").T(h.Version)
+				if h.Version == "" {
+					return
 				}
+				// Wrap the hash so a hover popup can reveal the commit subject.
+				b.Span("class", "version-wrap").R(
+					b.Span("class", "version-label").T(h.Version),
+					b.Wrap(func() {
+						if h.VersionMessage != "" {
+							b.Span("class", "version-popup").T(h.VersionMessage)
+						}
+					}),
+				)
 			}),
 		),
 		b.DivClass("header-selectors").R(

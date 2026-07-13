@@ -2,7 +2,9 @@ package web
 
 import (
 	"encoding/json"
+	"os/exec"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"kro/config"
@@ -19,13 +21,20 @@ import (
 // All handlers close over the registry + store so they can resolve clients on demand.
 // buildNumber is the short commit hash injected via -ldflags at build time; if empty,
 // we fall back to runtime/debug VCS info so dev runs (`go run .`) still show a hash.
-func NewServer(cfg config.Config, reg *kube.ClientRegistry, store *state.Store, mgr *podwatch.Manager, buildNumber string) *rweb.Server {
+func NewServer(cfg config.Config, reg *kube.ClientRegistry, store *state.Store, mgr *podwatch.Manager, buildNumber, buildMessage string) *rweb.Server {
 	svr := rweb.NewServer(rweb.ServerOptions{
 		Address: ":" + cfg.Port,
 		Verbose: cfg.Verbose,
 	})
 
-	h := &handlers{reg: reg, store: store, mgr: mgr, buildNumber: resolveBuildNumber(buildNumber)}
+	resolvedBuild := resolveBuildNumber(buildNumber)
+	h := &handlers{
+		reg:          reg,
+		store:        store,
+		mgr:          mgr,
+		buildNumber:  resolvedBuild,
+		buildMessage: resolveBuildMessage(buildMessage, resolvedBuild),
+	}
 
 	// Long-lived hub broadcasting watch-manager status events (new pod
 	// streams, state changes, limit hits) to every open watch modal. Unlike
@@ -92,4 +101,22 @@ func resolveBuildNumber(injected string) string {
 		}
 	}
 	return ""
+}
+
+// resolveBuildMessage returns the subject (top line) of the commit that the
+// build hash points at. It prefers an ldflags-injected message, then shells out
+// to `git show` for the given hash so dev runs still get one. Returns "" when
+// neither is available (e.g. a binary running outside its git checkout).
+func resolveBuildMessage(injected, hash string) string {
+	if injected != "" {
+		return injected
+	}
+	if hash == "" {
+		return ""
+	}
+	out, err := exec.Command("git", "show", "-s", "--format=%s", hash).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }

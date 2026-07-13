@@ -16,6 +16,10 @@ import (
 // BuildNumber is set via -ldflags at build time.
 var BuildNumber = ""
 
+// BuildMessage is the top line of the build commit's message, optionally set
+// via -ldflags at build time. When empty, the server derives it from git.
+var BuildMessage = ""
+
 func main() {
 	cfg := config.Load()
 
@@ -56,7 +60,7 @@ func main() {
 	logger.InfoF("watch log dir: %s (retention=%v, 0s=auto-clean off, podReadyTimeout=%v)",
 		watchLogDir, retention, cfg.PodReadyTimeout)
 
-	srv := web.NewServer(cfg, reg, store, mgr, BuildNumber)
+	srv := web.NewServer(cfg, reg, store, mgr, BuildNumber, BuildMessage)
 
 	logger.InfoF("kro listening on :%s (build=%s)", cfg.Port, BuildNumber)
 	if err := srv.Run(); err != nil {

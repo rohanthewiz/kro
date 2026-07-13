@@ -18,10 +18,11 @@ import (
 )
 
 type handlers struct {
-	reg         *kube.ClientRegistry
-	store       *state.Store
-	mgr         *podwatch.Manager
-	buildNumber string
+	reg          *kube.ClientRegistry
+	store        *state.Store
+	mgr          *podwatch.Manager
+	buildNumber  string
+	buildMessage string
 }
 
 // resolve picks (context, namespace) using the store as the pinned-list source.
