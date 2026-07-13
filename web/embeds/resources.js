@@ -393,26 +393,58 @@
         }
     };
 
+    // Maps a resource kind (as it appears in a warning message) to the tab
+    // that owns it, so an RBAC warning surfaces on the relevant panel instead
+    // of piling every kind's warning onto the Pods view.
+    var WARNING_TAB_BY_KIND = {
+        'Jobs': 'workloads',
+        'Pods': 'workloads',
+        'Deployments': 'deployments',
+        'ReplicaSets': 'deployments',
+        'StatefulSets': 'sets',
+        'DaemonSets': 'sets',
+        'Services': 'networking',
+        'Ingresses': 'networking',
+        'ConfigMaps': 'config',
+        'Secrets': 'config',
+        'PersistentVolumes': 'storage',
+        'PersistentVolumeClaims': 'storage',
+        'StorageClasses': 'storage'
+    };
+
+    // Messages look like "Could not list <Kind> — check RBAC permissions".
+    // Unknown kinds fall back to the first tab so nothing is silently dropped.
+    function warningTabId(w) {
+        var m = /Could not list (\w+)/.exec(w);
+        if (m && WARNING_TAB_BY_KIND[m[1]]) return WARNING_TAB_BY_KIND[m[1]];
+        return TAB_CONFIG[0].id;
+    }
+
+    function warningsBarHTML(list) {
+        if (!list || list.length === 0) return '';
+        var html = '<div class="warnings-bar">';
+        list.forEach(function(w) {
+            html += '<div class="warning-item">⚠ ' + escapeHtml(w) + '</div>';
+        });
+        return html + '</div>';
+    }
+
     function rebuildTables(tree) {
         var ctx = { tree: tree, allPods: buildAllPods(tree) };
 
-        var warningsHTML = '';
-        var warnings = tree.warnings || [];
-        if (warnings.length > 0) {
-            warningsHTML = '<div class="warnings-bar">';
-            warnings.forEach(function(w) {
-                warningsHTML += '<div class="warning-item">⚠ ' + escapeHtml(w) + '</div>';
-            });
-            warningsHTML += '</div>';
-        }
+        // Group warnings by the tab whose resources they concern, so each
+        // panel only shows the RBAC gaps relevant to what it renders.
+        var warningsByTab = {};
+        (tree.warnings || []).forEach(function(w) {
+            var id = warningTabId(w);
+            (warningsByTab[id] = warningsByTab[id] || []).push(w);
+        });
 
-        // Warnings appear at the top of the first tab only — they're a
-        // cluster-level signal and would just be noise on every panel.
         for (var i = 0; i < TAB_CONFIG.length; i++) {
             var tab = TAB_CONFIG[i];
             var anchor = document.getElementById('tab-sections-' + tab.id);
             if (!anchor) continue;
-            var html = (i === 0 ? warningsHTML : '');
+            var html = warningsBarHTML(warningsByTab[tab.id]);
             for (var j = 0; j < tab.sections.length; j++) {
                 var builder = SECTION_BUILDERS[tab.sections[j]];
                 if (builder) html += builder(ctx);
