@@ -832,9 +832,12 @@
 
         // logrus/zerolog JSON lines ({"level":"error","msg":"...",...}) need
         // their own pass — the logfmt regex below only recognizes key=value and
-        // bare level tokens, so JSON level/keys would never be colorized.
+        // bare level tokens, so JSON level/keys would never be colorized. Allow
+        // a leading "[container] " prefix (kro tags multi-container pod lines
+        // with it) before the opening brace; the global replace below leaves
+        // the prefix untouched, so no extra bookkeeping is needed.
         var trimmed = (line || '').replace(/^\s+/, '');
-        if (trimmed.charAt(0) === '{' && /&quot;[\w.\-]+&quot;\s*:/.test(escaped)) {
+        if (/^(?:\[[^\]]*\]\s*)?\{/.test(trimmed) && /&quot;[\w.\-]+&quot;\s*:/.test(escaped)) {
             // value := quoted string | number | true/false/null
             var jsonRe = /(&quot;[\w.\-]+&quot;)(\s*:\s*)(&quot;(?:[^&]|&(?!quot;))*?&quot;|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)/g;
             var jsonOut = escaped.replace(jsonRe, function(m, keyTok, sep, val) {
