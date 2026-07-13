@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 
@@ -19,6 +20,24 @@ var BuildNumber = ""
 // BuildMessage is the top line of the build commit's message, optionally set
 // via -ldflags at build time. When empty, the server derives it from git.
 var BuildMessage = ""
+
+// BuildMessageB64 is a base64-encoded alternative to BuildMessage. Injecting
+// the subject encoded avoids quoting pitfalls in the -ldflags string when the
+// commit message contains spaces, quotes, or apostrophes. When set, it takes
+// precedence over BuildMessage.
+var BuildMessageB64 = ""
+
+// buildMessage returns the commit subject to hand the server, decoding the
+// base64 form when present and falling back to the plaintext var otherwise.
+func buildMessage() string {
+	if BuildMessageB64 == "" {
+		return BuildMessage
+	}
+	if b, err := base64.StdEncoding.DecodeString(BuildMessageB64); err == nil {
+		return string(b)
+	}
+	return BuildMessage
+}
 
 func main() {
 	cfg := config.Load()
@@ -60,7 +79,7 @@ func main() {
 	logger.InfoF("watch log dir: %s (retention=%v, 0s=auto-clean off, podReadyTimeout=%v)",
 		watchLogDir, retention, cfg.PodReadyTimeout)
 
-	srv := web.NewServer(cfg, reg, store, mgr, BuildNumber, BuildMessage)
+	srv := web.NewServer(cfg, reg, store, mgr, BuildNumber, buildMessage())
 
 	logger.InfoF("kro listening on :%s (build=%s)", cfg.Port, BuildNumber)
 	if err := srv.Run(); err != nil {
