@@ -21,6 +21,37 @@
         if (btn) btn.textContent = isDark ? '☀️' : '🌙';
     };
 
+    // ===== Copy commit hash (version popup) =====
+    // Copies the button's data-hash to the clipboard and briefly flips the icon
+    // to a checkmark (via the `copied` class). Falls back to a hidden textarea +
+    // execCommand when the async Clipboard API is unavailable (e.g. non-secure
+    // contexts or older WebKit).
+    window.kroCopyCommitHash = function(btn) {
+        var hash = btn && btn.getAttribute('data-hash');
+        if (!hash) return;
+
+        function flash() {
+            btn.classList.add('copied');
+            setTimeout(function() { btn.classList.remove('copied'); }, 1200);
+        }
+        function fallback() {
+            var ta = document.createElement('textarea');
+            ta.value = hash;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand('copy'); flash(); } catch (e) {}
+            document.body.removeChild(ta);
+        }
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(hash).then(flash, fallback);
+        } else {
+            fallback();
+        }
+    };
+
     // ===== Selection state (mirrors server cookies) =====
     var currentCtx = '';
     var currentNs = '';

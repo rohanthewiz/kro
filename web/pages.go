@@ -23,10 +23,10 @@ var watchJS string
 // /api/resources and a live /sse/resources stream, both keyed off cookies set
 // by /api/select.
 func (h *handlers) Page(c rweb.Context) error {
-	return c.WriteHTML(renderPage(h.buildNumber, h.buildMessage))
+	return c.WriteHTML(renderPage(h.buildNumber, h.buildMessage, h.buildHash))
 }
 
-func renderPage(buildNumber, buildMessage string) string {
+func renderPage(buildNumber, buildMessage, buildHash string) string {
 	const pageName = "KRo — k8s resources"
 
 	b := element.B()
@@ -42,7 +42,7 @@ func renderPage(buildNumber, buildMessage string) string {
 		),
 		b.Body("class", "dark").R(
 			b.DivClass("container").R(
-				HeaderBar{Title: "KRo", Version: buildNumber, VersionMessage: buildMessage}.Render(b),
+				HeaderBar{Title: "KRo", Version: buildNumber, VersionMessage: buildMessage, VersionHash: buildHash}.Render(b),
 
 				b.DivClass("summary-bar").R(
 					summaryCard(b, "jobs", "Jobs", "summary-jobs"),

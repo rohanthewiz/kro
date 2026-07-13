@@ -27,6 +27,10 @@ var BuildMessage = ""
 // precedence over BuildMessage.
 var BuildMessageB64 = ""
 
+// BuildHash is the full commit hash, optionally set via -ldflags at build time.
+// When empty, the server derives it from runtime/debug VCS info.
+var BuildHash = ""
+
 // buildMessage returns the commit subject to hand the server, decoding the
 // base64 form when present and falling back to the plaintext var otherwise.
 func buildMessage() string {
@@ -79,7 +83,7 @@ func main() {
 	logger.InfoF("watch log dir: %s (retention=%v, 0s=auto-clean off, podReadyTimeout=%v)",
 		watchLogDir, retention, cfg.PodReadyTimeout)
 
-	srv := web.NewServer(cfg, reg, store, mgr, BuildNumber, buildMessage())
+	srv := web.NewServer(cfg, reg, store, mgr, BuildNumber, buildMessage(), BuildHash)
 
 	logger.InfoF("kro listening on :%s (build=%s)", cfg.Port, BuildNumber)
 	if err := srv.Run(); err != nil {

@@ -23,6 +23,7 @@ type handlers struct {
 	mgr          *podwatch.Manager
 	buildNumber  string
 	buildMessage string
+	buildHash    string
 }
 
 // resolve picks (context, namespace) using the store as the pinned-list source

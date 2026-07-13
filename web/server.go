@@ -21,7 +21,7 @@ import (
 // All handlers close over the registry + store so they can resolve clients on demand.
 // buildNumber is the short commit hash injected via -ldflags at build time; if empty,
 // we fall back to runtime/debug VCS info so dev runs (`go run .`) still show a hash.
-func NewServer(cfg config.Config, reg *kube.ClientRegistry, store *state.Store, mgr *podwatch.Manager, buildNumber, buildMessage string) *rweb.Server {
+func NewServer(cfg config.Config, reg *kube.ClientRegistry, store *state.Store, mgr *podwatch.Manager, buildNumber, buildMessage, buildHash string) *rweb.Server {
 	svr := rweb.NewServer(rweb.ServerOptions{
 		Address: ":" + cfg.Port,
 		Verbose: cfg.Verbose,
@@ -34,6 +34,7 @@ func NewServer(cfg config.Config, reg *kube.ClientRegistry, store *state.Store, 
 		mgr:          mgr,
 		buildNumber:  resolvedBuild,
 		buildMessage: resolveBuildMessage(buildMessage, resolvedBuild),
+		buildHash:    resolveBuildHash(buildHash),
 	}
 
 	// Long-lived hub broadcasting watch-manager status events (new pod
@@ -119,4 +120,24 @@ func resolveBuildMessage(injected, hash string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// resolveBuildHash returns the full commit hash for the build. It prefers the
+// ldflags-injected value, then falls back to the full VCS revision the Go
+// toolchain embeds for builds inside a git checkout. Returns "" if neither is
+// available.
+func resolveBuildHash(injected string) string {
+	if injected != "" {
+		return injected
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	for _, s := range info.Settings {
+		if s.Key == "vcs.revision" && s.Value != "" {
+			return s.Value
+		}
+	}
+	return ""
 }

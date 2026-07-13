@@ -35,7 +35,8 @@
     vertical-align: middle;
     cursor: help;
 }
-/* Commit-subject popup revealed on hovering the version hash. */
+/* Commit popup revealed on hovering the version hash: full hash header with a
+   copy button, then the commit subject. */
 .version-popup {
     position: absolute;
     top: 100%;
@@ -46,7 +47,7 @@
     width: max-content;
     max-width: 460px;
     white-space: normal;
-    padding: 6px 10px;
+    padding: 8px 10px;
     background: #2d3436;
     color: #f5f6fa;
     font-size: 0.72rem;
@@ -55,9 +56,53 @@
     line-height: 1.35;
     border-radius: 6px;
     box-shadow: 0 4px 14px rgba(0,0,0,0.28);
-    pointer-events: none;
+}
+/* Transparent bridge across the margin gap so the pointer can travel from the
+   hash down onto the (interactive) popup without the hover dropping. */
+.version-popup::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -7px;
+    height: 7px;
 }
 .version-wrap:hover .version-popup { display: block; }
+.version-popup-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.version-popup-hash {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-weight: 700;
+    font-size: 0.72rem;
+    letter-spacing: 0.02em;
+    word-break: break-all;
+}
+.version-copy-btn {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 5px;
+    background: rgba(255,255,255,0.12);
+    color: #dfe6e9;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.version-copy-btn:hover { background: rgba(255,255,255,0.22); color: #fff; }
+.version-copy-btn svg { display: block; }
+.version-copy-btn .icon-check { display: none; }
+.version-copy-btn.copied { color: #26de81; background: rgba(38,222,129,0.16); }
+.version-copy-btn.copied .icon-copy { display: none; }
+.version-copy-btn.copied .icon-check { display: block; }
+.version-popup-msg { color: #f5f6fa; }
 .header-actions {
     display: flex;
     align-items: center;

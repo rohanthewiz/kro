@@ -9,6 +9,11 @@ import (
 //go:embed embeds/header.css
 var headerCSS string
 
+// copyIconSVG is a "two overlapping rectangles" copy glyph followed by a
+// checkmark glyph. CSS shows the copy icon by default and swaps to the check
+// while the button carries the `copied` class (see header.css).
+const copyIconSVG = `<svg class="icon-copy" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="icon-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`
+
 // HeaderBar renders kro's top navigation: title, context dropdown, namespace
 // dropdown with add/remove buttons, an SSE status pill, refresh button, and
 // dark-mode toggle. Dropdowns are populated by JS once /api/contexts and
@@ -19,6 +24,9 @@ type HeaderBar struct {
 	// VersionMessage is the top line of the build commit's message. When set,
 	// hovering the version hash reveals it in a small popup.
 	VersionMessage string
+	// VersionHash is the full commit hash. When set, the hover popup shows it in
+	// bold as a header alongside a button to copy it to the clipboard.
+	VersionHash string
 }
 
 func (h HeaderBar) Render(b *element.Builder) any {
@@ -29,13 +37,34 @@ func (h HeaderBar) Render(b *element.Builder) any {
 				if h.Version == "" {
 					return
 				}
-				// Wrap the hash so a hover popup can reveal the commit subject.
+				// Wrap the hash so a hover popup can reveal the full commit hash
+				// (with a copy button) and the commit subject.
 				b.Span("class", "version-wrap").R(
 					b.Span("class", "version-label").T(h.Version),
 					b.Wrap(func() {
-						if h.VersionMessage != "" {
-							b.Span("class", "version-popup").T(h.VersionMessage)
+						if h.VersionHash == "" && h.VersionMessage == "" {
+							return
 						}
+						b.DivClass("version-popup").R(
+							b.Wrap(func() {
+								if h.VersionHash != "" {
+									b.DivClass("version-popup-head").R(
+										b.Span("class", "version-popup-hash").T(h.VersionHash),
+										b.Button("type", "button", "class", "version-copy-btn",
+											"title", "Copy commit hash",
+											"data-hash", h.VersionHash,
+											"onclick", "kroCopyCommitHash(this)").R(
+											b.T(copyIconSVG),
+										),
+									)
+								}
+							}),
+							b.Wrap(func() {
+								if h.VersionMessage != "" {
+									b.DivClass("version-popup-msg").T(h.VersionMessage)
+								}
+							}),
+						)
 					}),
 				)
 			}),

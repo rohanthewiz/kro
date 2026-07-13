@@ -214,15 +214,16 @@ install_go_local() {
 # ---- build -----------------------------------------------------------------
 
 build_kro() {
-  local build_id build_msg_b64
+  local build_id build_hash build_msg_b64
   build_id="$(git -C "$KRO_DIR" rev-parse --short HEAD)"
+  build_hash="$(git -C "$KRO_DIR" rev-parse HEAD)"
   # Base64-encode the commit subject so it survives ldflags quoting regardless
   # of spaces, quotes, or apostrophes; main.go decodes it at startup.
   build_msg_b64="$(git -C "$KRO_DIR" show -s --format=%s HEAD | base64 | tr -d '\n')"
   info "building kro (BuildNumber=$build_id)"
   ( cd "$KRO_DIR" && \
     "$GO_BIN" build -trimpath \
-      -ldflags "-s -w -X main.BuildNumber=$build_id -X main.BuildMessageB64=$build_msg_b64" \
+      -ldflags "-s -w -X main.BuildNumber=$build_id -X main.BuildHash=$build_hash -X main.BuildMessageB64=$build_msg_b64" \
       -o kro . )
   [ -x "$KRO_DIR/kro" ] || die "build reported success but $KRO_DIR/kro is missing"
   ok "built $KRO_DIR/kro"
