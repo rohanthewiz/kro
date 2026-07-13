@@ -396,7 +396,8 @@ body.watch-resizing { cursor: row-resize; user-select: none; }
 .watch-frame-close:hover { color: #c0392b; }
 
 .watch-frame-copy,
-.watch-frame-search {
+.watch-frame-search,
+.watch-frame-font {
     background: none;
     border: none;
     display: inline-flex;
@@ -408,8 +409,10 @@ body.watch-resizing { cursor: row-resize; user-select: none; }
     padding: 2px 4px;
     flex: none;
 }
+.watch-frame-font { font-weight: 600; }
 .watch-frame-copy:hover,
-.watch-frame-search:hover { color: #0984e3; }
+.watch-frame-search:hover,
+.watch-frame-font:hover { color: #0984e3; }
 .watch-frame-copy.copied { color: #00b894; }
 .watch-frame-copy.copy-failed { color: #c0392b; }
 .watch-frame-search.on { color: #0984e3; }
@@ -468,10 +471,12 @@ body.dark .watch-settings-sep { border-color: #4a5568; }
 body.dark .watch-log-usage,
 body.dark .watch-settings-hint { color: #8395a7; }
 body.dark .watch-frame-copy,
-body.dark .watch-frame-search { color: #8395a7; }
+body.dark .watch-frame-search,
+body.dark .watch-frame-font { color: #8395a7; }
 body.dark .watch-frame-copy:hover,
 body.dark .watch-frame-search:hover,
-body.dark .watch-frame-search.on { color: #54a0ff; }
+body.dark .watch-frame-search.on,
+body.dark .watch-frame-font:hover { color: #54a0ff; }
 body.dark .watch-frame-copy.copied { color: #00b894; }
 body.dark .watch-controls,
 body.dark .watch-stream-list { border-color: #4a5568; }

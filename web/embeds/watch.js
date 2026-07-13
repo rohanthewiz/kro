@@ -721,6 +721,8 @@
                 '<span class="watch-frame-status">connecting…</span>' +
                 '<span class="log-lvl-btns"></span>' +
                 '<button type="button" class="watch-frame-search" title="Search logs (Esc to close)">' + SEARCH_SVG + '</button>' +
+                '<button type="button" class="watch-frame-font" data-act="font-down" title="Decrease font size">A−</button>' +
+                '<button type="button" class="watch-frame-font" data-act="font-up" title="Increase font size">A+</button>' +
                 '<button type="button" class="watch-frame-copy" title="Copy buffer to clipboard">' + COPY_SVG + '</button>' +
                 '<button type="button" class="watch-frame-close" title="Close frame (capture continues)">×</button>' +
             '</div>' +
@@ -761,6 +763,9 @@
             });
         }
         wireFrameSearch(frame);
+        applyWatchFrameFont(frame.body);
+        el.querySelector('[data-act="font-down"]').addEventListener('click', function() { adjustWatchFrameFont(-1); });
+        el.querySelector('[data-act="font-up"]').addEventListener('click', function() { adjustWatchFrameFont(1); });
         el.querySelector('.watch-frame-close').addEventListener('click', function() {
             removeFrame(frame, true);
             delete frames[key];
@@ -826,6 +831,27 @@
         } else {
             done(fallback());
         }
+    }
+
+    // ===== Frame font size =====
+    // A−/A+ shrink/grow the log text. Persisted globally so every open frame
+    // (and future ones) share one size, matching the pod-log modal's behavior.
+    var WATCH_FRAME_FONT_KEY = 'kro_watch_frame_font_px';
+    var WATCH_FRAME_FONT_MIN = 9, WATCH_FRAME_FONT_MAX = 22, WATCH_FRAME_FONT_DEFAULT = 11.5;
+
+    function getWatchFrameFont() {
+        var v = parseFloat(localStorage.getItem(WATCH_FRAME_FONT_KEY));
+        if (isNaN(v)) return WATCH_FRAME_FONT_DEFAULT;
+        return Math.max(WATCH_FRAME_FONT_MIN, Math.min(WATCH_FRAME_FONT_MAX, v));
+    }
+    function applyWatchFrameFont(el) {
+        if (el) el.style.fontSize = getWatchFrameFont() + 'px';
+    }
+    function adjustWatchFrameFont(delta) {
+        var s = Math.max(WATCH_FRAME_FONT_MIN, Math.min(WATCH_FRAME_FONT_MAX, getWatchFrameFont() + delta));
+        localStorage.setItem(WATCH_FRAME_FONT_KEY, String(s));
+        var bodies = document.querySelectorAll('#watch-frames .watch-frame-body');
+        for (var i = 0; i < bodies.length; i++) bodies[i].style.fontSize = s + 'px';
     }
 
     // ===== Per-frame log search =====
