@@ -16,7 +16,7 @@ func resolveWith(t *testing.T, reg *ClientRegistry, cookieHeader string) (Select
 	var got Selection
 	var gotErr error
 	s.Get("/probe", func(c rweb.Context) error {
-		got, gotErr = ResolveSelection(c, reg, nil)
+		got, gotErr = ResolveSelection(c, reg, nil, nil)
 		return c.WriteString("ok")
 	})
 
@@ -64,6 +64,57 @@ func TestSelectionRejectsUnknownContextCookie(t *testing.T) {
 	}
 }
 
+func TestSelectionUsesLastWhenNoCookie(t *testing.T) {
+	reg := NewRegistry(newTestConfig(), nil)
+	last := &Last{
+		Context:   "ctx-b",
+		Namespace: func(ctx string) string { return "kube-system" },
+	}
+	s := rweb.NewServer()
+	var got Selection
+	s.Get("/probe", func(c rweb.Context) error {
+		got, _ = ResolveSelection(c, reg, nil, last)
+		return c.WriteString("ok")
+	})
+	s.Request("GET", "/probe", nil, nil)
+	if got.Context != "ctx-b" || got.Namespace != "kube-system" {
+		t.Errorf("got %+v, want {ctx-b, kube-system} (last selected)", got)
+	}
+}
+
+func TestSelectionCookieBeatsLast(t *testing.T) {
+	reg := NewRegistry(newTestConfig(), nil)
+	last := &Last{
+		Context:   "ctx-b",
+		Namespace: func(ctx string) string { return "kube-system" },
+	}
+	s := rweb.NewServer()
+	var got Selection
+	s.Get("/probe", func(c rweb.Context) error {
+		got, _ = ResolveSelection(c, reg, nil, last)
+		return c.WriteString("ok")
+	})
+	s.Request("GET", "/probe", []rweb.Header{{Key: "Cookie", Value: "kro_ctx=ctx-a; kro_ns=team-a"}}, nil)
+	if got.Context != "ctx-a" || got.Namespace != "team-a" {
+		t.Errorf("got %+v, want {ctx-a, team-a} (cookie beats last)", got)
+	}
+}
+
+func TestSelectionIgnoresUnknownLastContext(t *testing.T) {
+	reg := NewRegistry(newTestConfig(), nil)
+	last := &Last{Context: "does-not-exist"}
+	s := rweb.NewServer()
+	var got Selection
+	s.Get("/probe", func(c rweb.Context) error {
+		got, _ = ResolveSelection(c, reg, nil, last)
+		return c.WriteString("ok")
+	})
+	s.Request("GET", "/probe", nil, nil)
+	if got.Context != "ctx-a" {
+		t.Errorf("Context = %q, want fallback to ctx-a (current-context)", got.Context)
+	}
+}
+
 func TestSelectionUsesPinnedWhenNoCookie(t *testing.T) {
 	reg := NewRegistry(newTestConfig(), nil)
 	pinned := func(ctx string) []string {
@@ -75,7 +126,7 @@ func TestSelectionUsesPinnedWhenNoCookie(t *testing.T) {
 	s := rweb.NewServer()
 	var got Selection
 	s.Get("/probe", func(c rweb.Context) error {
-		got, _ = ResolveSelection(c, reg, pinned)
+		got, _ = ResolveSelection(c, reg, pinned, nil)
 		return c.WriteString("ok")
 	})
 	s.Request("GET", "/probe", nil, nil)

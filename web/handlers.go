@@ -25,9 +25,14 @@ type handlers struct {
 	buildMessage string
 }
 
-// resolve picks (context, namespace) using the store as the pinned-list source.
+// resolve picks (context, namespace) using the store as the pinned-list source
+// and as the "last selected" fallback for cookieless sessions.
 func (h *handlers) resolve(c rweb.Context) (kube.Selection, error) {
-	return kube.ResolveSelection(c, h.reg, h.store.Namespaces)
+	last := &kube.Last{
+		Context:   h.store.LastContext(),
+		Namespace: h.store.LastNamespace,
+	}
+	return kube.ResolveSelection(c, h.reg, h.store.Namespaces, last)
 }
 
 // Contexts returns all kubeconfig contexts plus the active selection.
@@ -91,6 +96,9 @@ func (h *handlers) AddNamespace(c rweb.Context) error {
 		if err := c.SetCookie(kube.CookieNamespace, body.Namespace); err != nil {
 			return writeJSONErr(c, http.StatusInternalServerError, err)
 		}
+		if err := h.store.SetLast(sel.Context, body.Namespace); err != nil {
+			logger.WarnF("persist last selection %s/%s: %v", sel.Context, body.Namespace, err)
+		}
 	}
 	return c.WriteJSON(map[string]any{
 		"namespaces": h.store.Namespaces(sel.Context),
@@ -125,6 +133,9 @@ func (h *handlers) RemoveNamespace(c rweb.Context) error {
 		}
 		if fallback != "" {
 			_ = c.SetCookie(kube.CookieNamespace, fallback)
+			if err := h.store.SetLast(sel.Context, fallback); err != nil {
+				logger.WarnF("persist last selection %s/%s: %v", sel.Context, fallback, err)
+			}
 		} else {
 			_ = c.DeleteCookie(kube.CookieNamespace)
 		}
@@ -172,6 +183,18 @@ func (h *handlers) Select(c rweb.Context) error {
 	if body.Namespace != "" {
 		sel.Namespace = body.Namespace
 	}
+
+	// Remember this selection so a cookieless session resumes it on startup.
+	// Pass body.Namespace (not sel.Namespace) so a bare context switch doesn't
+	// mis-record the previous context's namespace against the new context.
+	ctx := body.Context
+	if ctx == "" {
+		ctx = sel.Context
+	}
+	if err := h.store.SetLast(ctx, body.Namespace); err != nil {
+		logger.WarnF("persist last selection %s/%s: %v", ctx, body.Namespace, err)
+	}
+
 	return c.WriteJSON(map[string]any{
 		"context":   sel.Context,
 		"namespace": sel.Namespace,

@@ -32,6 +32,13 @@ func DefaultPath() (string, error) {
 type data struct {
 	Version    int                 `json:"version"`
 	Namespaces map[string][]string `json:"namespaces"` // contextName -> [namespace, ...]
+
+	// LastContext is the context the user most recently selected; LastNamespace
+	// maps a context to the namespace last selected within it. Together they let
+	// a fresh browser (no cookie) resume the last-used cluster/namespace on
+	// startup instead of snapping back to the kubeconfig defaults.
+	LastContext   string            `json:"lastContext,omitempty"`
+	LastNamespace map[string]string `json:"lastNamespace,omitempty"` // contextName -> namespace
 }
 
 // Store is a goroutine-safe handle to the JSON state file.
@@ -48,7 +55,11 @@ type Store struct {
 func Open(path string) (*Store, error) {
 	s := &Store{
 		path: path,
-		d:    data{Version: 1, Namespaces: map[string][]string{}},
+		d: data{
+			Version:       1,
+			Namespaces:    map[string][]string{},
+			LastNamespace: map[string]string{},
+		},
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -65,6 +76,9 @@ func Open(path string) (*Store, error) {
 	}
 	if s.d.Namespaces == nil {
 		s.d.Namespaces = map[string][]string{}
+	}
+	if s.d.LastNamespace == nil {
+		s.d.LastNamespace = map[string]string{}
 	}
 	return s, nil
 }
@@ -117,6 +131,50 @@ func (s *Store) Remove(ctx, ns string) (bool, error) {
 		delete(s.d.Namespaces, ctx)
 	}
 	return true, s.saveLocked()
+}
+
+// LastContext returns the most recently selected context, or "" if none has
+// been recorded yet.
+func (s *Store) LastContext() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.d.LastContext
+}
+
+// LastNamespace returns the namespace last selected within ctx, or "" if none
+// has been recorded for it.
+func (s *Store) LastNamespace(ctx string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.d.LastNamespace[ctx]
+}
+
+// SetLast records ctx as the last-used context and, when ns is non-empty, ns as
+// the last-used namespace within ctx. Empty arguments are ignored so callers can
+// update just one axis (e.g. a context switch that doesn't name a namespace).
+// Persists only when something actually changed.
+func (s *Store) SetLast(ctx, ns string) error {
+	if ctx == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := false
+	if s.d.LastContext != ctx {
+		s.d.LastContext = ctx
+		changed = true
+	}
+	if ns != "" && s.d.LastNamespace[ctx] != ns {
+		if s.d.LastNamespace == nil {
+			s.d.LastNamespace = map[string]string{}
+		}
+		s.d.LastNamespace[ctx] = ns
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return s.saveLocked()
 }
 
 // saveLocked writes the file atomically (temp + rename) under the held lock.
