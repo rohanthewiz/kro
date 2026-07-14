@@ -948,7 +948,7 @@
             '\\d{2}/\\d{2}/\\d{4}',
             '\\d{1,2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:\\s*[AP]M)?',
             '\\b(true|false)\\b',                                                      // 5: bool
-            '-?\\b\\d+(?:\\.\\d+)?\\b',                                                // (no group) numbers
+            '(?<![\\w-])-?\\b\\d+(?:\\.\\d+)?\\b',                                     // (no group) numbers; lookbehind keeps hash/UUID segments (e.g. ...5c29-4700-8fc8) from reading as negatives
         ].join('|'), 'g');
 
         var out = escaped.replace(re, function(m, msgVal, key, lvlVal, bareLvl, boolVal) {
@@ -986,7 +986,7 @@
             '\\d{2}/\\d{2}/\\d{4}',
             '\\d{1,2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:\\s*[AP]M)?',
             '\\b(true|false)\\b',
-            '-?\\b\\d+(?:\\.\\d+)?\\b',
+            '(?<![\\w-])-?\\b\\d+(?:\\.\\d+)?\\b',
         ].join('|'), 'g');
         return s.replace(re, function(m, boolVal) {
             if (boolVal !== undefined) return '<span class="log-bool log-bool-' + boolVal + '">' + boolVal + '</span>';
