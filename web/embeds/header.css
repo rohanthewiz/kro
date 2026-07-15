@@ -113,6 +113,7 @@
 /* Connection-status dot — used for SSE streams */
 .log-status {
     display: inline-block;
+    flex: 0 0 auto;
     width: 8px;
     height: 8px;
     border-radius: 50%;

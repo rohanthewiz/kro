@@ -1,6 +1,7 @@
 package podwatch
 
 import (
+	"math/rand/v2"
 	"time"
 
 	"github.com/rohanthewiz/logger"
@@ -12,7 +13,27 @@ import (
 const (
 	watchBackoffMin = time.Second
 	watchBackoffMax = 30 * time.Second
+
+	// watchTimeout{Min,Max}Secs bound the server-requested lifetime of each
+	// watch connection. Kept under common API-server load-balancer idle
+	// timeouts (the AWS NLB fronting EKS silently blackholes a flow idle past
+	// 350s, never sending a FIN) so a watch is torn down and re-established
+	// before it can wedge on a stale connection with ResultChan blocked
+	// forever. Jittered so many sessions don't re-list in lockstep.
+	watchTimeoutMinSecs = 240
+	watchTimeoutMaxSecs = 300
+
+	// watchStallGrace is how long past the requested timeout the watchdog
+	// waits for the channel to close on its own before forcing it — the
+	// backstop for when the server-side close never reaches us.
+	watchStallGrace = 30 * time.Second
 )
+
+// watchTimeoutSecs returns a jittered watch timeout, in seconds, within
+// [watchTimeoutMinSecs, watchTimeoutMaxSecs].
+func watchTimeoutSecs() int64 {
+	return int64(watchTimeoutMinSecs + rand.IntN(watchTimeoutMaxSecs-watchTimeoutMinSecs+1))
+}
 
 // runWatchLoop watches the session's namespace for pods and starts a log
 // stream for every pod that was not present at watch start. Raw Watch with a
@@ -43,9 +64,11 @@ func (m *Manager) runWatchLoop(sess *Session, rv string) {
 			backoff = watchBackoffMin
 		}
 
+		timeout := watchTimeoutSecs()
 		w, err := sess.client.CoreV1().Pods(sess.Namespace).Watch(sess.ctx, metaV1.ListOptions{
 			ResourceVersion:     rv,
 			AllowWatchBookmarks: true,
+			TimeoutSeconds:      &timeout,
 		})
 		if err != nil {
 			if sess.ctx.Err() != nil {
@@ -60,6 +83,14 @@ func (m *Manager) runWatchLoop(sess *Session, rv string) {
 			continue
 		}
 		backoff = watchBackoffMin
+
+		// Backstop for a wedged watch: if the server-side close never reaches
+		// us (a half-open connection silently dropped by a proxy or load
+		// balancer), the range below would block forever and the watch would
+		// go deaf to new pods. Force it closed a little past the requested
+		// timeout so the loop re-lists and reconnects. Idempotent with the
+		// w.Stop() after the range.
+		watchdog := time.AfterFunc(time.Duration(timeout)*time.Second+watchStallGrace, w.Stop)
 
 	events:
 		for ev := range w.ResultChan() {
@@ -85,9 +116,11 @@ func (m *Manager) runWatchLoop(sess *Session, rv string) {
 				}
 			}
 		}
+		watchdog.Stop()
 		w.Stop()
-		// Channel closed (server timeout, network blip, or error event):
-		// re-list to catch pods created during the gap.
+		// Channel closed (server timeout, network blip, error event, or the
+		// watchdog forcing a stalled connection): re-list to catch pods
+		// created during the gap.
 		needRelist = true
 	}
 }
