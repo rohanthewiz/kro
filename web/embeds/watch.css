@@ -205,6 +205,12 @@
 .watch-btn.stop { background: #7b241c; border-color: #7b241c; color: #fff; }
 .watch-btn.stop:hover:not(:disabled) { background: #922b21; border-color: #922b21; color: #fff; }
 
+/* Per-session "no more streams" (do-not-disturb) toggle: icon-only button
+   that goes solid red while new-pod streams are being refused. */
+.watch-btn.dnd svg { vertical-align: -2px; }
+.watch-btn.dnd.on { background: #c0392b; border-color: #c0392b; color: #fff; }
+.watch-btn.dnd.on:hover { background: #a93226; border-color: #a93226; color: #fff; }
+
 /* Stream list. Default height caps at 38%; dragging the splitter below sets
    an explicit height instead (watch.js). */
 .watch-stream-list {
@@ -494,6 +500,8 @@ body.dark .watch-ns-select:hover { border-color: #54a0ff; }
 body.dark .watch-btn.primary { background: #0984e3; border-color: #0984e3; color: #fff; }
 body.dark .watch-btn.stop { background: #7b241c; border-color: #7b241c; color: #fff; }
 body.dark .watch-btn.stop:hover:not(:disabled) { background: #922b21; border-color: #922b21; color: #fff; }
+body.dark .watch-btn.dnd.on { background: #c0392b; border-color: #c0392b; color: #fff; }
+body.dark .watch-btn.dnd.on:hover { background: #a93226; border-color: #a93226; color: #fff; }
 body.dark .watch-row:hover { background: rgba(84, 160, 255, 0.10); }
 body.dark .watch-session-head { border-color: #4a5568; border-left-color: #636e72; }
 body.dark .watch-session.current .watch-session-head { border-left-color: #54a0ff; }

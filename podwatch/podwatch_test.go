@@ -152,6 +152,38 @@ func TestActiveStreamCountAndCap(t *testing.T) {
 	}
 }
 
+func TestNoNewStreamsGate(t *testing.T) {
+	m, sess := newTestSession(t)
+
+	if err := m.SetNoNewStreams("c1", "n1", true); err != nil {
+		t.Fatalf("SetNoNewStreams: %v", err)
+	}
+	if !m.Status().Sessions[0].NoNewStreams {
+		t.Error("status must report noNewStreams on")
+	}
+
+	// While on, a new pod gets no stream and is baselined so it stays
+	// ignored after the toggle turns off.
+	m.startStream(sess, "quiet-pod")
+	if _, exists := sess.streams["quiet-pod"]; exists {
+		t.Error("pod must not get a stream while noNewStreams is on")
+	}
+	if _, baselined := sess.baseline["quiet-pod"]; !baselined {
+		t.Error("pod skipped under noNewStreams must join the baseline")
+	}
+
+	if err := m.SetNoNewStreams("c1", "n1", false); err != nil {
+		t.Fatalf("SetNoNewStreams off: %v", err)
+	}
+	if m.Status().Sessions[0].NoNewStreams {
+		t.Error("status must report noNewStreams off")
+	}
+
+	if err := m.SetNoNewStreams("c1", "nope", true); err != ErrNoSession {
+		t.Errorf("unknown session: got %v, want ErrNoSession", err)
+	}
+}
+
 func TestSubscribeReplayAndLive(t *testing.T) {
 	m, sess := newTestSession(t)
 	st := &Stream{Pod: "p", state: StateRunning, subs: map[chan string]struct{}{}}

@@ -87,11 +87,15 @@ type Session struct {
 	Namespace string
 	StartedAt time.Time
 
-	ctx      context.Context
-	cancel   context.CancelFunc
-	client   *kubernetes.Clientset
-	baseline map[string]struct{} // pods present at watch start; written only before the watch loop spawns
-	streams  map[string]*Stream  // pod name -> stream; guarded by Manager.mu
+	ctx    context.Context
+	cancel context.CancelFunc
+	client *kubernetes.Clientset
+	// baseline holds pods to ignore: those present at watch start, plus those
+	// created while noNewStreams was on. Written by Start (before the watch
+	// loop spawns) and then only by the watch-loop goroutine (startStream).
+	baseline     map[string]struct{}
+	streams      map[string]*Stream // pod name -> stream; guarded by Manager.mu
+	noNewStreams bool               // do-not-disturb: ignore newly created pods; guarded by Manager.mu
 }
 
 // Stream captures one pod's logs to a file and fans lines out to tee
@@ -128,10 +132,11 @@ type StreamStatus struct {
 }
 
 type SessionStatus struct {
-	Context   string         `json:"context"`
-	Namespace string         `json:"namespace"`
-	StartedAt time.Time      `json:"startedAt"`
-	Streams   []StreamStatus `json:"streams"`
+	Context      string         `json:"context"`
+	Namespace    string         `json:"namespace"`
+	StartedAt    time.Time      `json:"startedAt"`
+	NoNewStreams bool           `json:"noNewStreams"`
+	Streams      []StreamStatus `json:"streams"`
 }
 
 type StatusPayload struct {
@@ -170,6 +175,26 @@ func (m *Manager) SetReadyTimeout(d time.Duration) {
 	if d > 0 {
 		m.readyTimeout = d
 	}
+}
+
+// SetNoNewStreams toggles a session's do-not-disturb: while on, pods created
+// in the namespace are permanently ignored (they join the baseline) instead
+// of getting log streams — so turning it back off does not retroactively
+// start streams for pods created during the quiet period. Existing streams
+// are unaffected either way.
+func (m *Manager) SetNoNewStreams(ctxName, ns string, on bool) error {
+	m.mu.Lock()
+	sess, ok := m.sessions[sessKey(ctxName, ns)]
+	if !ok {
+		m.mu.Unlock()
+		return ErrNoSession
+	}
+	sess.noNewStreams = on
+	m.mu.Unlock()
+	m.notifyEvent("session_no_new", map[string]any{
+		"context": ctxName, "namespace": ns, "noNewStreams": on,
+	})
+	return nil
 }
 
 // ClearTerminal removes every terminal (completed|stopped|error) stream from
@@ -321,6 +346,7 @@ func (m *Manager) Status() StatusPayload {
 
 func (m *Manager) sessionStatus(sess *Session) SessionStatus {
 	m.mu.Lock()
+	noNew := sess.noNewStreams
 	streams := make([]*Stream, 0, len(sess.streams))
 	for _, st := range sess.streams {
 		streams = append(streams, st)
@@ -334,7 +360,7 @@ func (m *Manager) sessionStatus(sess *Session) SessionStatus {
 		return streams[i].Pod < streams[j].Pod
 	})
 
-	ss := SessionStatus{Context: sess.Context, Namespace: sess.Namespace, StartedAt: sess.StartedAt, Streams: []StreamStatus{}}
+	ss := SessionStatus{Context: sess.Context, Namespace: sess.Namespace, StartedAt: sess.StartedAt, NoNewStreams: noNew, Streams: []StreamStatus{}}
 	for _, st := range streams {
 		ss.Streams = append(ss.Streams, st.status())
 	}

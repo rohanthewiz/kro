@@ -22,6 +22,13 @@ func (m *Manager) startStream(sess *Session, podName string) {
 		m.mu.Unlock()
 		return
 	}
+	if sess.noNewStreams {
+		// Do-not-disturb: baseline the pod so it stays ignored even after the
+		// toggle is turned back off (a later re-list won't pick it up).
+		sess.baseline[podName] = struct{}{}
+		m.mu.Unlock()
+		return
+	}
 	if m.activeStreamCountLocked() >= m.maxStreamsNow() {
 		m.mu.Unlock()
 		m.notifyEvent("limit_reached", map[string]any{

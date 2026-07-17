@@ -112,6 +112,27 @@ func (h *handlers) WatchStreamAction(c rweb.Context) error {
 	return c.WriteJSON(map[string]string{"status": body.Action})
 }
 
+// WatchNoNewStreams toggles a session's do-not-disturb: while on, newly
+// created pods are ignored (no streams start); existing streams keep
+// capturing. Body: {"context","namespace","noNewStreams":bool}.
+func (h *handlers) WatchNoNewStreams(c rweb.Context) error {
+	var body struct {
+		watchSessionBody
+		NoNewStreams *bool `json:"noNewStreams"`
+	}
+	if err := json.NewDecoder(bytes.NewReader(c.Request().Body())).Decode(&body); err != nil {
+		return writeJSONErr(c, http.StatusBadRequest, serr.Wrap(err, "invalid JSON"))
+	}
+	if body.Context == "" || body.Namespace == "" || body.NoNewStreams == nil {
+		return writeJSONErr(c, http.StatusBadRequest, serr.New("context, namespace, and noNewStreams are required"))
+	}
+	if err := h.mgr.SetNoNewStreams(body.Context, body.Namespace, *body.NoNewStreams); err != nil {
+		return writeJSONErr(c, watchErrStatus(err), err)
+	}
+	logger.InfoF("pod watch no-new-streams set to %v for %s/%s", *body.NoNewStreams, body.Context, body.Namespace)
+	return c.WriteJSON(map[string]bool{"noNewStreams": *body.NoNewStreams})
+}
+
 // WatchSetMax sets the cap on concurrently active streams (the UI slider).
 // Body: {"max": N}. The manager clamps to its allowed range and returns the
 // applied value.

@@ -103,6 +103,14 @@
         '<circle cx="7" cy="7" r="5"/>' +
         '<line x1="11" y1="11" x2="14.5" y2="14.5"/></svg>';
 
+    // Do-not-disturb icon (bar in a circle) for the per-session "no more
+    // streams" toggle.
+    var DND_SVG =
+        '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor"' +
+        ' stroke-width="1.8" stroke-linecap="round" aria-hidden="true">' +
+        '<circle cx="8" cy="8" r="6.25"/>' +
+        '<line x1="5" y1="8" x2="11" y2="8"/></svg>';
+
     function esc(s) {
         return String(s == null ? '' : s)
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -505,14 +513,21 @@
                         esc(s.namespace) + '</span>' +
                     '<span class="watch-session-ctx">' + esc(s.context) + '</span>' +
                     '<span style="flex:1"></span>' +
+                    '<button type="button" class="watch-btn dnd' + (s.noNewStreams ? ' on' : '') +
+                        '" data-act="no-new"' + sessAttrs + ' title="' + (s.noNewStreams
+                            ? 'No more streams is on: new pods in this namespace are ignored (for good). Click to accept new pods again.'
+                            : 'No more streams: ignore newly created pods (existing streams keep capturing)') + '">' +
+                        DND_SVG + '</button>' +
                     '<button type="button" class="watch-btn" data-act="clear-session"' + sessAttrs +
                         ' title="Remove this namespace\'s ended streams (log files are kept)">✕ Clear</button>' +
                     '<button type="button" class="watch-btn stop" data-act="stop-session"' + sessAttrs +
                         ' title="Stop watching ' + esc(s.context + ' / ' + s.namespace) + '">■ Stop</button>' +
                 '</div>';
             if (!s.streams || !s.streams.length) {
-                html += '<div class="watch-empty">Watching… no new pods yet. Existing pods are ignored by design.</div>' +
-                    '</div>';
+                html += '<div class="watch-empty">' + (s.noNewStreams
+                    ? 'No more streams is on — new pods are being ignored.'
+                    : 'Watching… no new pods yet. Existing pods are ignored by design.') +
+                    '</div></div>';
                 return;
             }
             s.streams.forEach(function(st) {
@@ -582,6 +597,8 @@
             watchStopSession(ctx, ns);
         } else if (act === 'clear-session') {
             clearStreams(ctx, ns);
+        } else if (act === 'no-new') {
+            toggleNoNewStreams(ctx, ns);
         } else {
             streamAction(ctx, ns, pod, act);
         }
@@ -622,6 +639,19 @@
                     : 'No ended streams to remove (active streams stay until stopped)');
                 fetchWatchStatus();
             })
+            .catch(function(err) { showNotice(err.message); });
+    }
+
+    // Per-session do-not-disturb: while on, the server ignores pods created
+    // in that namespace (no new streams); existing streams keep capturing.
+    function toggleNoNewStreams(ctx, ns) {
+        var on = false;
+        ((lastStatus && lastStatus.sessions) || []).some(function(s) {
+            if (s.context === ctx && s.namespace === ns) { on = !!s.noNewStreams; return true; }
+            return false;
+        });
+        postJSON('/api/watch/nonew', { context: ctx, namespace: ns, noNewStreams: !on })
+            .then(fetchWatchStatus)
             .catch(function(err) { showNotice(err.message); });
     }
 

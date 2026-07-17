@@ -70,6 +70,7 @@ func NewServer(cfg config.Config, reg *kube.ClientRegistry, store *state.Store, 
 	svr.Get("/api/watch/status", h.WatchStatus)
 	svr.Post("/api/watch/stream", h.WatchStreamAction)
 	svr.Post("/api/watch/maxstreams", h.WatchSetMax)
+	svr.Post("/api/watch/nonew", h.WatchNoNewStreams)
 	svr.Post("/api/watch/clear", h.WatchClear)
 	svr.Get("/api/watch/export", h.WatchExport)
 	svr.Get("/api/watch/loginfo", h.WatchLogInfo)
