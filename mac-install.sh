@@ -396,10 +396,11 @@ import AppKit
 import Foundation
 import WebKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKDownloadDelegate {
     private var window: NSWindow!
     private var webView: WKWebView!
     private var serverProcess: Process?
+    private var downloadDestinations = [ObjectIdentifier: URL]()
     private let port = "$KRO_PORT"
     private var baseURL: URL { URL(string: "http://127.0.0.1:\(port)")! }
     private var healthURL: URL { baseURL.appendingPathComponent("health") }
@@ -554,6 +555,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
 
     private func loadApp() {
         webView.load(URLRequest(url: baseURL))
+    }
+
+    // MARK: Downloads
+    // A bare WKWebView silently drops anchors with a download attribute and
+    // responses it won't display inline (Content-Disposition: attachment) —
+    // the UI's export/download buttons do nothing without this section.
+    // Files are saved to ~/Downloads (deduped like Safari) and revealed in
+    // Finder when done.
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if !navigationResponse.canShowMIMEType || isAttachment(navigationResponse.response) {
+            decisionHandler(.download)
+        } else {
+            decisionHandler(.allow)
+        }
+    }
+
+    private func isAttachment(_ response: URLResponse) -> Bool {
+        guard let http = response as? HTTPURLResponse,
+              let disposition = http.value(forHTTPHeaderField: "Content-Disposition") else { return false }
+        return disposition.lowercased().hasPrefix("attachment")
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
+                  suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+        var dest = downloads.appendingPathComponent(suggestedFilename)
+        let base = dest.deletingPathExtension().lastPathComponent
+        let ext = dest.pathExtension
+        var n = 1
+        while FileManager.default.fileExists(atPath: dest.path) {
+            n += 1
+            let name = ext.isEmpty ? "\(base) (\(n))" : "\(base) (\(n)).\(ext)"
+            dest = downloads.appendingPathComponent(name)
+        }
+        downloadDestinations[ObjectIdentifier(download)] = dest
+        completionHandler(dest)
+    }
+
+    func downloadDidFinish(_ download: WKDownload) {
+        if let url = downloadDestinations.removeValue(forKey: ObjectIdentifier(download)) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+    }
+
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        downloadDestinations.removeValue(forKey: ObjectIdentifier(download))
+        let alert = NSAlert()
+        alert.messageText = "Download failed"
+        alert.informativeText = error.localizedDescription
+        alert.alertStyle = .warning
+        alert.runModal()
     }
 
     private func showError(_ message: String) {
