@@ -97,6 +97,10 @@
                 removeBtn.disabled = false;
             }
             currentNs = sel.value || '';
+            // Keep the Pod Watch namespace picker in sync if it's already built
+            // — the context (and thus its namespace list) may have just changed
+            // while the Watch tab is the active view.
+            if (window.watchPageSelectionChanged) window.watchPageSelectionChanged();
             return currentNs;
         });
     }

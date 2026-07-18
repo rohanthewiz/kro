@@ -392,6 +392,19 @@
         connectStatusSSE();
     };
 
+    // Called by resources.js (from loadNamespaces) whenever the global context
+    // or its pinned-namespace list changes, so the Watch picker and title stay
+    // in sync even while the Watch tab is already visible — no tab round-trip
+    // needed. No-op until the page has been built.
+    window.watchPageSelectionChanged = function() {
+        if (!pageBuilt) return;
+        var sel = currentSelection();
+        var sub = document.getElementById('watch-title-sub');
+        if (sub) sub.textContent =
+            sel.context && sel.namespace ? sel.context + ' / ' + sel.namespace : '';
+        loadWatchNamespaces();
+    };
+
     // Called by switchTab() when leaving the Watch tab. Only the status SSE
     // is dropped; tee frames keep their log streams so they're intact when
     // the user comes back. Background capture is server-owned regardless.
