@@ -103,13 +103,14 @@
         '<circle cx="7" cy="7" r="5"/>' +
         '<line x1="11" y1="11" x2="14.5" y2="14.5"/></svg>';
 
-    // Do-not-disturb icon (bar in a circle) for the per-session "no more
-    // streams" toggle.
+    // Do-not-disturb icon (prohibition/no-entry sign: a diagonal slash through
+    // a circle) for the per-session "no more streams" toggle. The diagonal —
+    // not a horizontal bar — is what reads as "blocked" rather than "minus".
     var DND_SVG =
-        '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor"' +
-        ' stroke-width="1.8" stroke-linecap="round" aria-hidden="true">' +
+        '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor"' +
+        ' stroke-width="2.2" stroke-linecap="round" aria-hidden="true">' +
         '<circle cx="8" cy="8" r="6.25"/>' +
-        '<line x1="5" y1="8" x2="11" y2="8"/></svg>';
+        '<line x1="3.6" y1="3.6" x2="12.4" y2="12.4"/></svg>';
 
     function esc(s) {
         return String(s == null ? '' : s)
