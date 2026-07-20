@@ -54,7 +54,7 @@ func TestDefaultLogDirEnvOverride(t *testing.T) {
 }
 
 func TestRingWrapAndSnapshot(t *testing.T) {
-	st := &Stream{state: StateRunning, subs: map[chan string]struct{}{}}
+	st := &Stream{state: StateRunning, subs: map[chan string]string{}}
 	total := ringLines + 25
 	for i := 0; i < total; i++ {
 		st.writeLine(fmt.Sprintf("line-%d", i))
@@ -78,7 +78,7 @@ func TestRingWrapAndSnapshot(t *testing.T) {
 }
 
 func TestWriteLineFlipsStartingToRunning(t *testing.T) {
-	st := &Stream{state: StateStarting, subs: map[chan string]struct{}{}}
+	st := &Stream{state: StateStarting, subs: map[chan string]string{}}
 	if !st.writeLine("first") {
 		t.Error("first writeLine should report the starting→running flip")
 	}
@@ -186,12 +186,12 @@ func TestNoNewStreamsGate(t *testing.T) {
 
 func TestSubscribeReplayAndLive(t *testing.T) {
 	m, sess := newTestSession(t)
-	st := &Stream{Pod: "p", state: StateRunning, subs: map[chan string]struct{}{}}
+	st := &Stream{Pod: "p", state: StateRunning, subs: map[chan string]string{}}
 	sess.streams["p"] = st
 	st.writeLine("old-1")
 	st.writeLine("old-2")
 
-	replay, ch, cancel, err := m.Subscribe("c1", "n1", "p", 0)
+	replay, ch, cancel, err := m.Subscribe("c1", "n1", "p", 0, "")
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -215,13 +215,13 @@ func TestSubscribeReplayAndLive(t *testing.T) {
 	}
 
 	// Terminal stream: replay only, channel pre-closed, cancel after close is safe.
-	st2 := &Stream{Pod: "done", state: StateRunning, subs: map[chan string]struct{}{}}
+	st2 := &Stream{Pod: "done", state: StateRunning, subs: map[chan string]string{}}
 	sess.streams["done"] = st2
 	st2.writeLine("only")
 	st2.mu.Lock()
 	st2.closeLocked(StateCompleted)
 	st2.mu.Unlock()
-	replay2, ch2, cancel2, err := m.Subscribe("c1", "n1", "done", 0)
+	replay2, ch2, cancel2, err := m.Subscribe("c1", "n1", "done", 0, "")
 	if err != nil {
 		t.Fatalf("Subscribe terminal: %v", err)
 	}
@@ -233,20 +233,20 @@ func TestSubscribeReplayAndLive(t *testing.T) {
 	}
 	cancel2()
 
-	if _, _, _, err := m.Subscribe("c1", "n1", "missing", 0); err != ErrNoStream {
+	if _, _, _, err := m.Subscribe("c1", "n1", "missing", 0, ""); err != ErrNoStream {
 		t.Errorf("missing stream err = %v, want ErrNoStream", err)
 	}
-	if _, _, _, err := m.Subscribe("cX", "nX", "p", 0); err != ErrNoSession {
+	if _, _, _, err := m.Subscribe("cX", "nX", "p", 0, ""); err != ErrNoSession {
 		t.Errorf("missing session err = %v, want ErrNoSession", err)
 	}
 }
 
 func TestSubscriberClosedOnStreamClose(t *testing.T) {
 	m, sess := newTestSession(t)
-	st := &Stream{Pod: "p", state: StateRunning, subs: map[chan string]struct{}{}}
+	st := &Stream{Pod: "p", state: StateRunning, subs: map[chan string]string{}}
 	sess.streams["p"] = st
 
-	_, ch, cancel, err := m.Subscribe("c1", "n1", "p", 0)
+	_, ch, cancel, err := m.Subscribe("c1", "n1", "p", 0, "")
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestSubscriberClosedOnStreamClose(t *testing.T) {
 
 func TestStreamActionTransitions(t *testing.T) {
 	m, sess := newTestSession(t)
-	st := &Stream{Pod: "p", state: StateRunning, subs: map[chan string]struct{}{}}
+	st := &Stream{Pod: "p", state: StateRunning, subs: map[chan string]string{}}
 	sess.streams["p"] = st
 
 	if err := m.StreamAction("c1", "n1", "p", "bogus"); err != ErrBadAction {
@@ -362,7 +362,7 @@ func TestSubscribeTerminalTailsFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openLogFile: %v", err)
 	}
-	st := &Stream{Pod: "done", state: StateRunning, subs: map[chan string]struct{}{}, filePath: path, file: f, w: w}
+	st := &Stream{Pod: "done", state: StateRunning, subs: map[chan string]string{}, filePath: path, file: f, w: w}
 	sess.streams["done"] = st
 	// More lines than the ring holds, so a file tail is provably not the ring.
 	total := ringLines + 50
@@ -373,7 +373,7 @@ func TestSubscribeTerminalTailsFile(t *testing.T) {
 
 	// tail > ring size: replay must come from the file and include lines the
 	// ring already evicted, plus the end marker.
-	replay, ch, _, err := m.Subscribe("c1", "n1", "done", total+10)
+	replay, ch, _, err := m.Subscribe("c1", "n1", "done", total+10, "")
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -388,7 +388,7 @@ func TestSubscribeTerminalTailsFile(t *testing.T) {
 	}
 
 	// tail smaller than the file: last n lines only.
-	replay, _, _, err = m.Subscribe("c1", "n1", "done", 2)
+	replay, _, _, err = m.Subscribe("c1", "n1", "done", 2, "")
 	if err != nil {
 		t.Fatalf("Subscribe small tail: %v", err)
 	}
@@ -397,12 +397,113 @@ func TestSubscribeTerminalTailsFile(t *testing.T) {
 	}
 
 	// tail 0 keeps the old behavior: ring snapshot.
-	replay, _, _, err = m.Subscribe("c1", "n1", "done", 0)
+	replay, _, _, err = m.Subscribe("c1", "n1", "done", 0, "")
 	if err != nil {
 		t.Fatalf("Subscribe no tail: %v", err)
 	}
 	if len(replay) != ringLines {
 		t.Errorf("no-tail replay len = %d, want ring size %d", len(replay), ringLines)
+	}
+}
+
+func TestClassifyLine(t *testing.T) {
+	cases := []struct{ line, want string }{
+		{`time="t" level=error msg="boom"`, "err"},
+		{`time="t" level="fatal" msg="dead"`, "err"},
+		{`time="t" level=warn msg="careful"`, "wrn"},
+		{`time="t" level=info msg="hi"`, "oth"},
+		{`{"level":"error","msg":"json boom"}`, "err"},
+		{`{"level":"warning","msg":"json warn"}`, "wrn"},
+		{`{"level":"debug","msg":"noise"}`, "oth"},
+		{`2026-01-01 ERROR something failed`, "err"},
+		{`2026-01-01 WARN heads up`, "wrn"},
+		{`2026-01-01 INFO all good`, "oth"},
+		{`    at foo.bar(stack:12)`, ""}, // continuation: no level of its own
+		{`plain line, no level here`, ""},
+	}
+	for _, c := range cases {
+		if got := classifyLine(c.line); got != c.want {
+			t.Errorf("classifyLine(%q) = %q, want %q", c.line, got, c.want)
+		}
+	}
+}
+
+// TestErrorsWarningsCompanionAndView covers the whole feature: errors and
+// warnings are routed into untruncated companion files (continuation lines
+// inheriting the preceding level), and the errors/warnings views replay the
+// right file and filter live delivery to that bucket.
+func TestErrorsWarningsCompanionAndView(t *testing.T) {
+	m, sess := newTestSession(t)
+	path := logFilePath(m.logDir, "c1", "n1", "p", time.Now())
+	f, w, err := openLogFile(path)
+	if err != nil {
+		t.Fatalf("openLogFile: %v", err)
+	}
+	st := &Stream{
+		Pod: "p", state: StateRunning, subs: map[chan string]string{},
+		filePath: path, errPath: companionPath(path, "errors"), warnPath: companionPath(path, "warnings"),
+		file: f, w: w,
+	}
+	sess.streams["p"] = st
+
+	st.writeLine(`level=info msg="starting"`)
+	st.writeLine(`level=error msg="boom 1"`)
+	st.writeLine(`    at stack.frame`) // no level → inherits err
+	st.writeLine(`level=warn msg="careful"`)
+	st.writeLine(`level=info msg="ok"`)
+	st.writeLine(`level=error msg="boom 2"`)
+
+	// Errors view: replay is exactly the error-bucket lines (including the
+	// inherited continuation), read whole from the untruncated companion.
+	replay, ch, cancel, err := m.Subscribe("c1", "n1", "p", 0, "errors")
+	if err != nil {
+		t.Fatalf("Subscribe errors: %v", err)
+	}
+	wantErr := "level=error msg=\"boom 1\"\n    at stack.frame\nlevel=error msg=\"boom 2\""
+	if strings.Join(replay, "\n") != wantErr {
+		t.Fatalf("errors replay =\n%q\nwant\n%q", strings.Join(replay, "\n"), wantErr)
+	}
+
+	recv := func() string {
+		select {
+		case v := <-ch:
+			return v
+		case <-time.After(time.Second):
+			t.Fatal("no live line delivered to errors view")
+			return ""
+		}
+	}
+	// A new error is delivered live; an info line in between is filtered out.
+	st.writeLine(`level=error msg="boom 3"`)
+	if got := recv(); got != `level=error msg="boom 3"` {
+		t.Errorf("live errors line = %q", got)
+	}
+	st.writeLine(`level=info msg="ignored by errors view"`)
+	st.writeLine(`level=error msg="boom 4"`)
+	if got := recv(); got != `level=error msg="boom 4"` {
+		t.Errorf("errors view must skip the info line; got %q", got)
+	}
+	cancel()
+
+	// Warnings view replays only the warning line.
+	replayW, _, cancelW, err := m.Subscribe("c1", "n1", "p", 0, "warnings")
+	if err != nil {
+		t.Fatalf("Subscribe warnings: %v", err)
+	}
+	if strings.Join(replayW, "\n") != `level=warn msg="careful"` {
+		t.Errorf("warnings replay = %q", replayW)
+	}
+	cancelW()
+
+	// The companion files exist and hold the full set (5 errors, 1 warning).
+	st.mu.Lock()
+	st.flushLocked()
+	st.mu.Unlock()
+	if lines, _ := readLogLines(companionPath(path, "errors")); len(lines) != 5 {
+		t.Errorf("errors file = %d lines, want 5", len(lines))
+	}
+	if lines, _ := readLogLines(companionPath(path, "warnings")); len(lines) != 1 {
+		t.Errorf("warnings file = %d lines, want 1", len(lines))
 	}
 }
 
@@ -413,7 +514,7 @@ func TestExportPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openLogFile: %v", err)
 	}
-	st := &Stream{Pod: "p", state: StateRunning, subs: map[chan string]struct{}{}, filePath: path, file: f, w: w}
+	st := &Stream{Pod: "p", state: StateRunning, subs: map[chan string]string{}, filePath: path, file: f, w: w}
 	sess.streams["p"] = st
 	st.writeLine("buffered-but-not-flushed")
 
@@ -537,7 +638,7 @@ func TestFileWriteAndMarkers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openLogFile: %v", err)
 	}
-	st := &Stream{Pod: "pod", state: StateRunning, subs: map[chan string]struct{}{}, filePath: path, file: f, w: w}
+	st := &Stream{Pod: "pod", state: StateRunning, subs: map[chan string]string{}, filePath: path, file: f, w: w}
 	st.writeLine("hello")
 	st.finalize(StateStopped, "stopped")
 

@@ -143,8 +143,10 @@ func (m *Manager) trackedFiles() map[string]bool {
 	keep := map[string]bool{}
 	for _, st := range streams {
 		st.mu.Lock()
-		if st.filePath != "" {
-			keep[st.filePath] = true
+		for _, p := range []string{st.filePath, st.errPath, st.warnPath} {
+			if p != "" {
+				keep[p] = true
+			}
 		}
 		st.mu.Unlock()
 	}

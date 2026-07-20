@@ -768,6 +768,11 @@
                 '<button type="button" class="watch-frame-font" data-act="font-down" title="Decrease font size">A−</button>' +
                 '<button type="button" class="watch-frame-font" data-act="font-up" title="Increase font size">A+</button>' +
                 '<button type="button" class="watch-frame-copy" title="Copy buffer to clipboard">' + COPY_SVG + '</button>' +
+                '<select class="watch-frame-view" title="Choose file: full log, errors only, or warnings only (errors/warnings are kept in full, never truncated)">' +
+                    '<option value="all">All</option>' +
+                    '<option value="errors">Errors</option>' +
+                    '<option value="warnings">Warnings</option>' +
+                '</select>' +
                 '<button type="button" class="watch-frame-close" title="Close frame (capture continues)">×</button>' +
             '</div>' +
             '<div class="modal-search-bar watch-frame-search-bar">' +
@@ -791,6 +796,7 @@
             es: null,
             buf: [],
             scheduled: false,
+            view: 'all', // which file this frame shows: all | errors | warnings
             lastLvl: null // level inherited by unleveled lines (stack traces etc.)
         };
 
@@ -820,11 +826,24 @@
             copyFrame(frame, this);
         });
 
-        // tail: for an already-ended stream the server replays the last
-        // <console buffer> lines from the log file instead of the ring.
-        var url = '/sse/watch-logs?context=' + encodeURIComponent(ctx) +
-            '&namespace=' + encodeURIComponent(ns) + '&pod=' + encodeURIComponent(pod) +
-            '&tail=' + getWatchBufLines();
+        var viewSel = el.querySelector('.watch-frame-view');
+        viewSel.value = frame.view;
+        viewSel.addEventListener('change', function() { setFrameView(frame, this.value); });
+
+        connectFrame(frame);
+        frames[key] = frame;
+        renderFramesVisibility();
+    }
+
+    // (Re)open the SSE tee for the frame's current view. tail applies to the
+    // full log ("all"); the errors/warnings views replay their whole companion
+    // file (never truncated) and stream only that bucket's lines live.
+    function connectFrame(frame) {
+        if (frame.es) { frame.es.close(); frame.es = null; }
+        var url = '/sse/watch-logs?context=' + encodeURIComponent(frame.ctx) +
+            '&namespace=' + encodeURIComponent(frame.ns) + '&pod=' + encodeURIComponent(frame.pod) +
+            '&tail=' + getWatchBufLines() + '&view=' + encodeURIComponent(frame.view);
+        frame.status.textContent = 'connecting…';
         frame.es = new EventSource(url);
         frame.es.onopen = function() { frame.status.textContent = 'live'; };
         frame.es.onerror = function() { frame.status.textContent = 'reconnecting…'; };
@@ -835,12 +854,25 @@
         frame.es.addEventListener('end', function() {
             frameAppend(frame, '— stream ended —', true);
             frame.status.textContent = 'ended';
-            frame.es.close();
-            frame.es = null;
+            if (frame.es) { frame.es.close(); frame.es = null; }
         });
+    }
 
-        frames[key] = frame;
-        renderFramesVisibility();
+    // Switch a frame between the full log and its errors/warnings file. The
+    // body is cleared and the tee reconnected so the chosen file replays from
+    // the top; capture (and the other files) keep running untouched.
+    function setFrameView(frame, view) {
+        if (view !== 'errors' && view !== 'warnings') view = 'all';
+        if (frame.view === view) return;
+        frame.view = view;
+        frame.buf = [];
+        frame.body.innerHTML = '';
+        frame.lastLvl = null;
+        if (frame.search && frame.search.open) {
+            frame.search.matchCount = 0;
+            refreshFrameSearchCount(frame);
+        }
+        connectFrame(frame);
     }
 
     // Copy the frame's visible buffer to the clipboard; swap the icon for a

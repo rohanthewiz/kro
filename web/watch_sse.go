@@ -9,9 +9,13 @@ import (
 
 // WatchLogsSSE tees one background watch stream to a console frame:
 //
-//	GET /sse/watch-logs?context=..&namespace=..&pod=..&tail=N
+//	GET /sse/watch-logs?context=..&namespace=..&pod=..&tail=N&view=all|errors|warnings
 //	event: log → data: "<line>"      (replay, then live)
 //	event: end → data: "stream ended" (stream stopped/completed)
+//
+// view (default "all") picks which file the frame shows: the full log, or the
+// untruncated errors/warnings companion. errors/warnings replay the whole
+// companion file and filter live lines to that bucket.
 //
 // Replay is the in-memory ring for a live stream; for an already-ended
 // stream it is the last tail lines of the log file (the client sends its
@@ -34,7 +38,9 @@ func (h *handlers) WatchLogsSSE(svr *rweb.Server) rweb.Handler {
 		}
 
 		tail, _ := strconv.Atoi(req.QueryParam("tail")) // 0 on absent/garbage → ring replay only
-		replay, live, unsub, err := h.mgr.Subscribe(ctxName, ns, pod, tail)
+		// view selects the file: "" / "all" (full log), "errors", or "warnings".
+		view := req.QueryParam("view")
+		replay, live, unsub, err := h.mgr.Subscribe(ctxName, ns, pod, tail, view)
 		if err != nil {
 			return writeTextErr(c, 404, err.Error())
 		}

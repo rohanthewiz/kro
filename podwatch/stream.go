@@ -42,7 +42,7 @@ func (m *Manager) startStream(sess *Session, podName string) {
 		Pod:       podName,
 		StartedAt: now,
 		state:     StateStarting,
-		subs:      map[chan string]struct{}{},
+		subs:      map[chan string]string{},
 	}
 	sess.streams[podName] = st
 	m.mu.Unlock()
@@ -52,6 +52,8 @@ func (m *Manager) startStream(sess *Session, podName string) {
 
 	st.mu.Lock()
 	st.filePath = path
+	st.errPath = companionPath(path, "errors")
+	st.warnPath = companionPath(path, "warnings")
 	if err != nil {
 		st.errMsg = err.Error()
 		st.closeLocked(StateError)
@@ -172,11 +174,17 @@ func (st *Stream) writeMarkerLocked(text string) {
 	st.emitLocked("--- " + text + " " + time.Now().UTC().Format(time.RFC3339) + " ---")
 }
 
-// emitLocked writes one line to the file (if open), the ring, and all subs.
+// emitLocked writes one line to the main file (if open), the matching
+// errors/warnings companion file, the ring, and all subscribers. Subscribers
+// with a view filter ("err"/"wrn") receive only lines in their bucket.
 func (st *Stream) emitLocked(line string) {
+	route := st.routeLocked(line)
 	if st.w != nil {
 		st.w.WriteString(line)
 		st.w.WriteByte('\n')
+	}
+	if route != "" {
+		st.writeIssueLocked(route, line)
 	}
 	if len(st.ring) < ringLines {
 		st.ring = append(st.ring, line)
@@ -184,11 +192,69 @@ func (st *Stream) emitLocked(line string) {
 		st.ring[st.ringAt] = line
 		st.ringAt = (st.ringAt + 1) % ringLines
 	}
-	for sub := range st.subs {
+	for sub, filter := range st.subs {
+		if filter != "" && filter != route {
+			continue
+		}
 		select { // never block capture on a slow tee; the file is authoritative
 		case sub <- line:
 		default:
 		}
+	}
+}
+
+// routeLocked classifies a line into an issue bucket ("err"|"wrn") or "",
+// carrying the last recognized level forward so unleveled continuation lines
+// (stack traces, wrapped messages) follow the entry that produced them — the
+// same inheritance the browser colorizer applies per frame.
+func (st *Stream) routeLocked(line string) string {
+	switch b := classifyLine(line); b {
+	case "err", "wrn":
+		st.lastRoute = b
+		return b
+	case "oth":
+		st.lastRoute = "oth" // a real info/debug line ends any error/warn run
+		return ""
+	default: // "" — no level token: inherit an ongoing error/warn run
+		if st.lastRoute == "err" || st.lastRoute == "wrn" {
+			return st.lastRoute
+		}
+		return ""
+	}
+}
+
+// writeIssueLocked appends an error/warning line to its companion file,
+// creating the file lazily on first use so a clean pod produces no extra
+// files. Best-effort: a companion open/write failure never disrupts capture,
+// since the main log remains authoritative.
+func (st *Stream) writeIssueLocked(route, line string) {
+	switch route {
+	case "err":
+		if st.errW == nil {
+			if st.errPath == "" {
+				return
+			}
+			f, w, err := openLogFile(st.errPath)
+			if err != nil {
+				return
+			}
+			st.errFile, st.errW = f, w
+		}
+		st.errW.WriteString(line)
+		st.errW.WriteByte('\n')
+	case "wrn":
+		if st.warnW == nil {
+			if st.warnPath == "" {
+				return
+			}
+			f, w, err := openLogFile(st.warnPath)
+			if err != nil {
+				return
+			}
+			st.warnFile, st.warnW = f, w
+		}
+		st.warnW.WriteString(line)
+		st.warnW.WriteByte('\n')
 	}
 }
 
@@ -203,6 +269,12 @@ func (st *Stream) flushLocked() {
 	if st.w != nil {
 		st.w.Flush()
 	}
+	if st.errW != nil {
+		st.errW.Flush()
+	}
+	if st.warnW != nil {
+		st.warnW.Flush()
+	}
 }
 
 // closeLocked flushes and closes the file, closes all tee subscribers, and
@@ -212,6 +284,14 @@ func (st *Stream) closeLocked(state StreamState) {
 	if st.file != nil {
 		st.file.Close()
 		st.file, st.w = nil, nil
+	}
+	if st.errFile != nil {
+		st.errFile.Close()
+		st.errFile, st.errW = nil, nil
+	}
+	if st.warnFile != nil {
+		st.warnFile.Close()
+		st.warnFile, st.warnW = nil, nil
 	}
 	for sub := range st.subs {
 		close(sub)

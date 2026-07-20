@@ -425,6 +425,19 @@ body.watch-resizing { cursor: row-resize; user-select: none; }
 .watch-frame-copy.copy-failed { color: #c0392b; }
 .watch-frame-search.on { color: #0984e3; }
 
+/* File selector (All / Errors / Warnings) at the far right of the frame head. */
+.watch-frame-view {
+    flex: none;
+    border: 1px solid #cfd8dc;
+    background: #fff;
+    border-radius: 5px;
+    padding: 1px 4px;
+    font-size: 11px;
+    color: #636e72;
+    cursor: pointer;
+}
+.watch-frame-view:hover { border-color: #0984e3; color: #0984e3; }
+
 /* Per-frame search bar reuses the modal's .modal-search-* styling, with
    tighter padding to fit the slimmer frame chrome. */
 .watch-frame .modal-search-bar { padding: 4px 10px; }
@@ -486,6 +499,12 @@ body.dark .watch-frame-search:hover,
 body.dark .watch-frame-search.on,
 body.dark .watch-frame-font:hover { color: #54a0ff; }
 body.dark .watch-frame-copy.copied { color: #00b894; }
+body.dark .watch-frame-view {
+    background: #1e272e;
+    border-color: #636e72;
+    color: #b2bec3;
+}
+body.dark .watch-frame-view:hover { border-color: #54a0ff; color: #54a0ff; }
 body.dark .watch-controls,
 body.dark .watch-stream-list { border-color: #4a5568; }
 body.dark .watch-btn {

@@ -111,12 +111,21 @@ type Stream struct {
 	state    StreamState
 	errMsg   string
 	filePath string
+	errPath  string             // <base>.errors.log; set at start, file opened lazily
+	warnPath string             // <base>.warnings.log; set at start, file opened lazily
 	cancel   context.CancelFunc // cancels the kube log stream (pause/stop)
 	file     *os.File
 	w        *bufio.Writer
-	ring     []string // circular: oldest at ringAt once full
-	ringAt   int
-	subs     map[chan string]struct{} // nil once the stream is terminal
+	errFile  *os.File // errors companion; opened on the first error line
+	errW     *bufio.Writer
+	warnFile *os.File // warnings companion; opened on the first warning line
+	warnW    *bufio.Writer
+	lastRoute string   // last classified bucket ("err"|"wrn"|"oth"|""), for continuation-line inheritance
+	ring      []string // circular: oldest at ringAt once full
+	ringAt    int
+	// subs maps each console tee's channel to its view filter: "" = all lines,
+	// "err" = errors view, "wrn" = warnings view. nil once the stream is terminal.
+	subs map[chan string]string
 }
 
 // JSON shapes for /api/watch/status and /sse/watch payloads.
@@ -474,15 +483,34 @@ func (m *Manager) StreamAction(ctxName, ns, pod, action string) error {
 // replay, regardless of what the client asks for.
 const maxTailLines = 100_000
 
-// Subscribe registers a console tee on a stream. The ring snapshot and the
+// viewFilter maps a requested console view to the stream's line-bucket filter:
+// "errors" → "err", "warnings" → "wrn", anything else (incl. "all") → "".
+func viewFilter(view string) string {
+	switch view {
+	case "errors":
+		return "err"
+	case "warnings":
+		return "wrn"
+	default:
+		return ""
+	}
+}
+
+// Subscribe registers a console tee on a stream. The replay snapshot and the
 // subscriber registration happen under one lock, so replay + live delivery
-// has no gap and no duplicates. For a terminal stream the returned channel
-// is already closed and, when tail > 0, the replay is the last tail lines
-// of the log file instead of the ring — the file is complete where the
-// ring caps out at ringLines (the ring is the fallback if the read fails).
-// The returned cancel is idempotent and safe to call after the stream
-// closed the channel.
-func (m *Manager) Subscribe(ctxName, ns, pod string, tail int) (replay []string, ch <-chan string, cancel func(), err error) {
+// has no gap and no duplicates. view selects what the tee sees:
+//
+//   - "" / "all": every line. Replay is the ring for a live stream; for a
+//     terminal stream with tail > 0 it is the last tail lines of the log file
+//     (complete where the ring caps at ringLines; the ring is the fallback if
+//     the read fails).
+//   - "errors" / "warnings": only that bucket's lines. Replay is the whole
+//     companion file (never truncated) and live delivery is filtered to the
+//     matching bucket, so the view holds every error/warning ever captured.
+//
+// For a terminal stream the returned channel is already closed. The returned
+// cancel is idempotent and safe to call after the stream closed the channel.
+func (m *Manager) Subscribe(ctxName, ns, pod string, tail int, view string) (replay []string, ch <-chan string, cancel func(), err error) {
 	m.mu.Lock()
 	sess, ok := m.sessions[sessKey(ctxName, ns)]
 	if !ok {
@@ -496,12 +524,33 @@ func (m *Manager) Subscribe(ctxName, ns, pod string, tail int) (replay []string,
 	}
 	m.mu.Unlock()
 
+	filter := viewFilter(view)
+
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	replay = st.ringSnapshotLocked()
+
+	if filter == "" {
+		replay = st.ringSnapshotLocked()
+	} else {
+		// Flush pending writes, then read the companion whole: every line
+		// already routed to this bucket is on disk, and any line emitted
+		// after we release the lock reaches the (filtered) subscriber — so
+		// there is no gap and no duplicate across the replay/live boundary.
+		st.flushLocked()
+		compPath := st.errPath
+		if filter == "wrn" {
+			compPath = st.warnPath
+		}
+		if compPath != "" {
+			if lines, rerr := readLogLines(compPath); rerr == nil {
+				replay = lines
+			}
+		}
+	}
+
 	sub := make(chan string, subChanSize)
 	if st.subs == nil { // terminal: replay only
-		if tail > 0 && st.filePath != "" {
+		if filter == "" && tail > 0 && st.filePath != "" {
 			if fromFile, ferr := tailFile(st.filePath, min(tail, maxTailLines)); ferr == nil {
 				replay = fromFile
 			}
@@ -509,7 +558,7 @@ func (m *Manager) Subscribe(ctxName, ns, pod string, tail int) (replay []string,
 		close(sub)
 		return replay, sub, func() {}, nil
 	}
-	st.subs[sub] = struct{}{}
+	st.subs[sub] = filter
 	cancel = func() {
 		st.mu.Lock()
 		defer st.mu.Unlock()

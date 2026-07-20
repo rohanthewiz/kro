@@ -49,6 +49,16 @@ func logFilePath(dir, ctxName, ns, pod string, t time.Time) string {
 	return filepath.Join(dir, sanitize(ctxName), sanitize(ns), name)
 }
 
+// companionPath derives a sibling file for a classification of a stream's log:
+//
+//	<base>-<ts>.log  →  <base>-<ts>.<kind>.log   (kind: "errors" | "warnings")
+//
+// These hold only the error/warning subset of lines and are never truncated,
+// so the full history stays accessible even after the console buffer scrolls.
+func companionPath(mainPath, kind string) string {
+	return strings.TrimSuffix(mainPath, ".log") + "." + kind + ".log"
+}
+
 // tailChunkSize is how much tailFile reads per step while walking backwards.
 const tailChunkSize = 64 * 1024
 
@@ -91,6 +101,32 @@ func tailFile(path string, n int) ([]string, error) {
 	}
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
+	}
+	return lines, nil
+}
+
+// readLogLines returns every line of the file at path (nil if it does not
+// exist). Used to replay a companion (errors/warnings) file in full — these
+// hold only the classified subset, so they stay small enough to read whole,
+// which is the point: the errors/warnings view is never truncated.
+func readLogLines(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, serr.Wrap(err, "open companion log")
+	}
+	defer f.Close()
+
+	var lines []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024) // tolerate long lines
+	for sc.Scan() {
+		lines = append(lines, sc.Text())
+	}
+	if err := sc.Err(); err != nil {
+		return nil, serr.Wrap(err, "scan companion log")
 	}
 	return lines, nil
 }
