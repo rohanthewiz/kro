@@ -1194,6 +1194,26 @@ body.dark .log-lvl-btn.off.lvlb-wrn { color: #fdcb6e; border-color: #fdcb6e; }
 body.dark .log-lvl-btn.off.lvlb-err { color: #ff6b6b; border-color: #ff6b6b; }
 body.dark .log-lvl-btn.off.lvlb-ftl { color: #ff8a8a; border-color: #ff8a8a; }
 
+/* Errors/Warnings frame view (watch.js applyFrameViewLock): a single-level
+   companion file can't be subset by level, so every button is locked
+   non-interactive and greyed. The one naming the current view keeps its full
+   color as a label. */
+.log-lvl-btns.view-locked .log-lvl-btn {
+    cursor: default;
+    background: transparent;
+    color: #b2bec3;
+    border-color: transparent;
+    opacity: 0.5;
+}
+.log-lvl-btns.view-locked .log-lvl-btn:hover { opacity: 0.5; }
+.log-lvl-btns.view-locked .log-lvl-btn.view-current {
+    opacity: 1;
+    color: #fff;
+}
+.log-lvl-btns.view-locked .log-lvl-btn.view-current.lvlb-wrn { background: #b6701a; }
+.log-lvl-btns.view-locked .log-lvl-btn.view-current.lvlb-err { background: #c0392b; }
+body.dark .log-lvl-btns.view-locked .log-lvl-btn:not(.view-current) { color: #636e72; }
+
 /* ===== Terminal section ===== */
 .term-section .section-header {
     flex-wrap: wrap;

@@ -868,11 +868,33 @@
         frame.buf = [];
         frame.body.innerHTML = '';
         frame.lastLvl = null;
+        applyFrameViewLock(frame);
         if (frame.search && frame.search.open) {
             frame.search.matchCount = 0;
             refreshFrameSearchCount(frame);
         }
         connectFrame(frame);
+    }
+
+    // In the Errors/Warnings views the frame shows a single-level companion
+    // file, so the per-frame level filter can't meaningfully subset it: lock
+    // every level button (disabled + greyed) and clear any active hide-* so the
+    // whole file shows. The button naming the current view stays full-color as a
+    // label. The "all" view restores the normal, interactive filter and re-
+    // applies the persisted hidden set.
+    function applyFrameViewLock(frame) {
+        var btnsEl = frame.el.querySelector('.log-lvl-btns');
+        if (!btnsEl) return;
+        var LF = window.kroLogFilter;
+        var locked = frame.view === 'errors' || frame.view === 'warnings';
+        var current = frame.view === 'errors' ? 'err' : (frame.view === 'warnings' ? 'wrn' : '');
+        btnsEl.classList.toggle('view-locked', locked);
+        var btns = btnsEl.querySelectorAll('.log-lvl-btn');
+        for (var i = 0; i < btns.length; i++) {
+            btns[i].disabled = locked;
+            btns[i].classList.toggle('view-current', locked && btns[i].dataset.lvl === current);
+        }
+        if (LF) LF.apply(frame.body, locked ? {} : LF.getHidden());
     }
 
     // Copy the frame's visible buffer to the clipboard; swap the icon for a
