@@ -505,6 +505,18 @@ func TestErrorsWarningsCompanionAndView(t *testing.T) {
 	if lines, _ := readLogLines(companionPath(path, "warnings")); len(lines) != 1 {
 		t.Errorf("warnings file = %d lines, want 1", len(lines))
 	}
+
+	// The running counters (surfaced to the UI for the view dropdown) track the
+	// companion files line-for-line, including the inherited continuation line.
+	if got := st.ErrCount.Load(); got != 5 {
+		t.Errorf("ErrCount = %d, want 5", got)
+	}
+	if got := st.WarnCount.Load(); got != 1 {
+		t.Errorf("WarnCount = %d, want 1", got)
+	}
+	if s := st.status(); s.ErrLines != 5 || s.WarnLines != 1 {
+		t.Errorf("status errLines/warnLines = %d/%d, want 5/1", s.ErrLines, s.WarnLines)
+	}
 }
 
 func TestExportPath(t *testing.T) {

@@ -105,6 +105,8 @@ type Stream struct {
 	StartedAt time.Time
 
 	LineCount  atomic.Int64
+	ErrCount   atomic.Int64 // lines routed to the errors companion (== its line count)
+	WarnCount  atomic.Int64 // lines routed to the warnings companion (== its line count)
 	LastLineAt atomic.Int64 // unix nanos of the last captured line
 
 	mu       sync.Mutex
@@ -136,6 +138,8 @@ type StreamStatus struct {
 	File         string    `json:"file"`
 	StartedAt    time.Time `json:"startedAt"`
 	Lines        int64     `json:"lines"`
+	ErrLines     int64     `json:"errLines"`  // lines captured to the errors companion
+	WarnLines    int64     `json:"warnLines"` // lines captured to the warnings companion
 	LastActivity time.Time `json:"lastActivity,omitzero"`
 	Error        string    `json:"error,omitempty"`
 }
@@ -632,7 +636,8 @@ func (m *Manager) runCountsTicker(sess *Session) {
 			if !isActive {
 				continue
 			}
-			c := map[string]any{"pod": st.Pod, "lines": st.LineCount.Load()}
+			c := map[string]any{"pod": st.Pod, "lines": st.LineCount.Load(),
+				"errLines": st.ErrCount.Load(), "warnLines": st.WarnCount.Load()}
 			if n := st.LastLineAt.Load(); n > 0 {
 				c["lastActivity"] = time.Unix(0, n)
 			}

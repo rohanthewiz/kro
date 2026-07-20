@@ -597,6 +597,7 @@
             }
         }
         renderFramesVisibility();
+        syncFrameCounts();
     }
 
     function onListClick(e) {
@@ -735,6 +736,7 @@
                     break;
                 }
             }
+            if (frames[key]) updateFrameViewCounts(frames[key], c.errLines || 0, c.warnLines || 0);
         });
     }
 
@@ -832,7 +834,56 @@
 
         connectFrame(frame);
         frames[key] = frame;
+        // Seed the Errors/Warnings option labels from the latest status so the
+        // counts show the moment the frame opens (live ticks refine them).
+        var seed = streamStatusFor(ctx, ns, pod);
+        updateFrameViewCounts(frame, seed ? (seed.errLines || 0) : 0, seed ? (seed.warnLines || 0) : 0);
         renderFramesVisibility();
+    }
+
+    // Find the latest StreamStatus for a pod in the cached status payload.
+    function streamStatusFor(ctx, ns, pod) {
+        if (!lastStatus) return null;
+        var sessions = lastStatus.sessions || [];
+        for (var i = 0; i < sessions.length; i++) {
+            if (sessions[i].context !== ctx || sessions[i].namespace !== ns) continue;
+            var streams = sessions[i].streams || [];
+            for (var j = 0; j < streams.length; j++) {
+                if (streams[j].pod === pod) return streams[j];
+            }
+        }
+        return null;
+    }
+
+    // Label the frame's view dropdown with each bucket's line count and bold
+    // the ones that have any, so "Errors (3)" / "Warnings (2)" stand out and a
+    // clean pod just shows plain "Errors"/"Warnings". Native <select> option
+    // styling is unreliable (esp. in the macOS webview), so we also flag the
+    // collapsed control when an issue view is the current selection.
+    function updateFrameViewCounts(frame, errCount, warnCount) {
+        var sel = frame.el.querySelector('.watch-frame-view');
+        if (!sel) return;
+        frame.errCount = errCount;
+        frame.warnCount = warnCount;
+        var opts = sel.options;
+        for (var i = 0; i < opts.length; i++) {
+            var v = opts[i].value;
+            var n = v === 'errors' ? errCount : v === 'warnings' ? warnCount : 0;
+            var base = v === 'errors' ? 'Errors' : v === 'warnings' ? 'Warnings' : 'All';
+            opts[i].textContent = n > 0 ? base + ' (' + n + ')' : base;
+            opts[i].classList.toggle('has-issues', n > 0);
+            opts[i].style.fontWeight = n > 0 ? '700' : '';
+        }
+        var selN = sel.value === 'errors' ? errCount : sel.value === 'warnings' ? warnCount : 0;
+        sel.classList.toggle('sel-issues', selN > 0);
+    }
+
+    // Refresh every open frame's view-dropdown counts from the cached status.
+    function syncFrameCounts() {
+        for (var key in frames) {
+            var st = streamStatusFor(frames[key].ctx, frames[key].ns, frames[key].pod);
+            if (st) updateFrameViewCounts(frames[key], st.errLines || 0, st.warnLines || 0);
+        }
     }
 
     // (Re)open the SSE tee for the frame's current view. tail applies to the

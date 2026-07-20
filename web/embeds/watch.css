@@ -437,6 +437,11 @@ body.watch-resizing { cursor: row-resize; user-select: none; }
     cursor: pointer;
 }
 .watch-frame-view:hover { border-color: #0984e3; color: #0984e3; }
+/* Errors/Warnings with a non-zero count are labelled "Errors (N)" and bolded.
+   Option-level styling is honored by some engines; the .sel-issues rule bolds
+   the collapsed control (always reliable) when an issue view is selected. */
+.watch-frame-view option.has-issues { font-weight: 700; }
+.watch-frame-view.sel-issues { font-weight: 700; }
 
 /* Per-frame search bar reuses the modal's .modal-search-* styling, with
    tighter padding to fit the slimmer frame chrome. */

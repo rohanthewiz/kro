@@ -242,6 +242,7 @@ func (st *Stream) writeIssueLocked(route, line string) {
 		}
 		st.errW.WriteString(line)
 		st.errW.WriteByte('\n')
+		st.ErrCount.Add(1)
 	case "wrn":
 		if st.warnW == nil {
 			if st.warnPath == "" {
@@ -255,6 +256,7 @@ func (st *Stream) writeIssueLocked(route, line string) {
 		}
 		st.warnW.WriteString(line)
 		st.warnW.WriteByte('\n')
+		st.WarnCount.Add(1)
 	}
 }
 
@@ -332,6 +334,8 @@ func (st *Stream) status() StreamStatus {
 		File:         path,
 		StartedAt:    st.StartedAt,
 		Lines:        st.LineCount.Load(),
+		ErrLines:     st.ErrCount.Load(),
+		WarnLines:    st.WarnCount.Load(),
 		LastActivity: last,
 		Error:        errMsg,
 	}
