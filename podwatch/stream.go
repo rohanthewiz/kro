@@ -29,13 +29,22 @@ func (m *Manager) startStream(sess *Session, podName string) {
 		m.mu.Unlock()
 		return
 	}
-	if m.activeStreamCountLocked() >= m.maxStreamsNow() {
+	maxN := m.maxStreamsNow()
+	if m.activeStreamCountLocked() >= maxN {
+		// Every slot is held by an active stream; there is nothing ended to
+		// evict, so the new pod is skipped rather than pushing past the cap.
 		m.mu.Unlock()
 		m.notifyEvent("limit_reached", map[string]any{
 			"context": sess.Context, "namespace": sess.Namespace,
-			"pod": podName, "max": m.maxStreamsNow(),
+			"pod": podName, "max": maxN,
 		})
 		return
+	}
+	// Whole-list cap: this stream will occupy a slot, so drop the oldest ended
+	// streams until the list will fit within maxN. The active check above
+	// guarantees enough ended streams exist to make room.
+	if over := m.totalStreamCountLocked() + 1 - maxN; over > 0 {
+		m.evictOldestTerminalLocked(over)
 	}
 	now := time.Now()
 	st := &Stream{
@@ -178,13 +187,13 @@ func (st *Stream) writeMarkerLocked(text string) {
 // errors/warnings companion file, the ring, and all subscribers. Subscribers
 // with a view filter ("err"/"wrn") receive only lines in their bucket.
 func (st *Stream) emitLocked(line string) {
-	route := st.routeLocked(line)
+	route, entryStart := st.routeLocked(line)
 	if st.w != nil {
 		st.w.WriteString(line)
 		st.w.WriteByte('\n')
 	}
 	if route != "" {
-		st.writeIssueLocked(route, line)
+		st.writeIssueLocked(route, line, entryStart)
 	}
 	if len(st.ring) < ringLines {
 		st.ring = append(st.ring, line)
@@ -206,28 +215,34 @@ func (st *Stream) emitLocked(line string) {
 // routeLocked classifies a line into an issue bucket ("err"|"wrn") or "",
 // carrying the last recognized level forward so unleveled continuation lines
 // (stack traces, wrapped messages) follow the entry that produced them — the
-// same inheritance the browser colorizer applies per frame.
-func (st *Stream) routeLocked(line string) string {
+// same inheritance the browser colorizer applies per frame. entryStart reports
+// whether the line begins a new entry (it carries an explicit level token)
+// rather than continuing the previous one, so the counters can tally entries
+// (approximately) while the companion file still keeps every line.
+func (st *Stream) routeLocked(line string) (route string, entryStart bool) {
 	switch b := classifyLine(line); b {
 	case "err", "wrn":
 		st.lastRoute = b
-		return b
+		return b, true
 	case "oth":
 		st.lastRoute = "oth" // a real info/debug line ends any error/warn run
-		return ""
+		return "", false
 	default: // "" — no level token: inherit an ongoing error/warn run
 		if st.lastRoute == "err" || st.lastRoute == "wrn" {
-			return st.lastRoute
+			return st.lastRoute, false
 		}
-		return ""
+		return "", false
 	}
 }
 
 // writeIssueLocked appends an error/warning line to its companion file,
 // creating the file lazily on first use so a clean pod produces no extra
-// files. Best-effort: a companion open/write failure never disrupts capture,
-// since the main log remains authoritative.
-func (st *Stream) writeIssueLocked(route, line string) {
+// files. Every routed line is written (so multi-line entries stay intact), but
+// the counter only ticks on entryStart lines — the ones that begin a new
+// entry — so the surfaced count approximates entries, not raw lines.
+// Best-effort: a companion open/write failure never disrupts capture, since
+// the main log remains authoritative.
+func (st *Stream) writeIssueLocked(route, line string, entryStart bool) {
 	switch route {
 	case "err":
 		if st.errW == nil {
@@ -242,7 +257,9 @@ func (st *Stream) writeIssueLocked(route, line string) {
 		}
 		st.errW.WriteString(line)
 		st.errW.WriteByte('\n')
-		st.ErrCount.Add(1)
+		if entryStart {
+			st.ErrCount.Add(1)
+		}
 	case "wrn":
 		if st.warnW == nil {
 			if st.warnPath == "" {
@@ -256,7 +273,9 @@ func (st *Stream) writeIssueLocked(route, line string) {
 		}
 		st.warnW.WriteString(line)
 		st.warnW.WriteByte('\n')
-		st.WarnCount.Add(1)
+		if entryStart {
+			st.WarnCount.Add(1)
+		}
 	}
 }
 
@@ -334,8 +353,8 @@ func (st *Stream) status() StreamStatus {
 		File:         path,
 		StartedAt:    st.StartedAt,
 		Lines:        st.LineCount.Load(),
-		ErrLines:     st.ErrCount.Load(),
-		WarnLines:    st.WarnCount.Load(),
+		ErrEntries:   st.ErrCount.Load(),
+		WarnEntries:  st.WarnCount.Load(),
 		LastActivity: last,
 		Error:        errMsg,
 	}

@@ -152,6 +152,57 @@ func TestActiveStreamCountAndCap(t *testing.T) {
 	}
 }
 
+// TestEvictOldestTerminalForCap covers the whole-list cap's eviction: the
+// oldest ended streams are dropped first, and active streams are never evicted
+// even when more removals are requested than there are ended streams.
+func TestEvictOldestTerminalForCap(t *testing.T) {
+	m, sess := newTestSession(t)
+	base := time.Now()
+	add := func(pod string, st StreamState, age time.Duration) {
+		sess.streams[pod] = &Stream{Pod: pod, state: st, StartedAt: base.Add(-age)}
+	}
+	add("ended-old", StateCompleted, 30*time.Second)
+	add("ended-mid", StateStopped, 20*time.Second)
+	add("ended-new", StateError, 10*time.Second)
+	add("run-a", StateRunning, 25*time.Second)
+	add("run-b", StatePaused, 5*time.Second)
+
+	m.mu.Lock()
+	if got := m.totalStreamCountLocked(); got != 5 {
+		m.mu.Unlock()
+		t.Fatalf("totalStreamCountLocked = %d, want 5", got)
+	}
+	removed := m.evictOldestTerminalLocked(2)
+	m.mu.Unlock()
+	if removed != 2 {
+		t.Errorf("evicted %d, want 2", removed)
+	}
+	for _, pod := range []string{"ended-new", "run-a", "run-b"} {
+		if _, ok := sess.streams[pod]; !ok {
+			t.Errorf("%s should remain (newest ended + actives)", pod)
+		}
+	}
+	for _, pod := range []string{"ended-old", "ended-mid"} {
+		if _, ok := sess.streams[pod]; ok {
+			t.Errorf("%s should have been evicted (oldest first)", pod)
+		}
+	}
+
+	// Ask for more than the one ended stream left: it goes, actives survive.
+	m.mu.Lock()
+	removed = m.evictOldestTerminalLocked(5)
+	m.mu.Unlock()
+	if removed != 1 {
+		t.Errorf("evicted %d, want 1 (only one ended stream remained)", removed)
+	}
+	if _, ok := sess.streams["ended-new"]; ok {
+		t.Error("ended-new should have been evicted")
+	}
+	if len(sess.streams) != 2 {
+		t.Errorf("active streams must survive eviction: len=%d, want 2", len(sess.streams))
+	}
+}
+
 func TestNoNewStreamsGate(t *testing.T) {
 	m, sess := newTestSession(t)
 
@@ -506,16 +557,18 @@ func TestErrorsWarningsCompanionAndView(t *testing.T) {
 		t.Errorf("warnings file = %d lines, want 1", len(lines))
 	}
 
-	// The running counters (surfaced to the UI for the view dropdown) track the
-	// companion files line-for-line, including the inherited continuation line.
-	if got := st.ErrCount.Load(); got != 5 {
-		t.Errorf("ErrCount = %d, want 5", got)
+	// The running counters (surfaced to the UI for the view dropdown) tally
+	// entries, not lines: the four explicit error lines each start an entry,
+	// but the inherited "at stack.frame" continuation is written to the
+	// companion (5 lines above) without bumping the count (4 entries).
+	if got := st.ErrCount.Load(); got != 4 {
+		t.Errorf("ErrCount = %d, want 4 entries (5 companion lines incl. 1 continuation)", got)
 	}
 	if got := st.WarnCount.Load(); got != 1 {
 		t.Errorf("WarnCount = %d, want 1", got)
 	}
-	if s := st.status(); s.ErrLines != 5 || s.WarnLines != 1 {
-		t.Errorf("status errLines/warnLines = %d/%d, want 5/1", s.ErrLines, s.WarnLines)
+	if s := st.status(); s.ErrEntries != 4 || s.WarnEntries != 1 {
+		t.Errorf("status errEntries/warnEntries = %d/%d, want 4/1", s.ErrEntries, s.WarnEntries)
 	}
 }
 

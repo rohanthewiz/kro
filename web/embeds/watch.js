@@ -231,11 +231,11 @@
                     '<button type="button" class="watch-btn stop" id="watch-stop" disabled>■ Stop Watch</button>' +
                     '<span class="watch-notice" id="watch-notice"></span>' +
                     '<span class="watch-count" id="watch-count"></span>' +
-                    '<span class="watch-stepper" title="Max concurrent streams">' +
+                    '<span class="watch-stepper" title="Max streams kept in the list (active + ended)">' +
                         '<span class="watch-stepper-val" id="watch-max-val"></span>' +
                         '<span class="watch-stepper-btns">' +
-                            '<button type="button" id="watch-max-up" title="Raise max concurrent streams">▲</button>' +
-                            '<button type="button" id="watch-max-down" title="Lower max concurrent streams">▼</button>' +
+                            '<button type="button" id="watch-max-up" title="Raise max streams in the list">▲</button>' +
+                            '<button type="button" id="watch-max-down" title="Lower max streams in the list">▼</button>' +
                         '</span>' +
                     '</span>' +
                     '<button type="button" class="watch-btn" id="watch-clear" title="Remove ended streams from the list (log files are kept)">✕ Clear Streams</button>' +
@@ -481,8 +481,14 @@
         var sel = watchTarget();
         var sessions = lastStatus.sessions || [];
 
-        document.getElementById('watch-count').textContent =
-            lastStatus.activeStreams + ' / ' + lastStatus.maxStreams + ' streams';
+        // Count is the whole list (active + ended) against the cap, so it
+        // matches the number of rows shown; the cap evicts the oldest ended
+        // stream to admit a new pod once full. Active count lives in the tip.
+        var countEl = document.getElementById('watch-count');
+        countEl.textContent =
+            (lastStatus.totalStreams || 0) + ' / ' + lastStatus.maxStreams + ' streams';
+        countEl.title = (lastStatus.activeStreams || 0) + ' capturing now; the rest are ended ' +
+            'streams kept until cleared. At the cap, a new pod evicts the oldest ended stream.';
 
         // Sync the max-streams stepper to the server's cap unless a local
         // change is still waiting on its debounced post.
@@ -736,7 +742,7 @@
                     break;
                 }
             }
-            if (frames[key]) updateFrameViewCounts(frames[key], c.errLines || 0, c.warnLines || 0);
+            if (frames[key]) updateFrameViewCounts(frames[key], c.errEntries || 0, c.warnEntries || 0);
         });
     }
 
@@ -837,7 +843,7 @@
         // Seed the Errors/Warnings option labels from the latest status so the
         // counts show the moment the frame opens (live ticks refine them).
         var seed = streamStatusFor(ctx, ns, pod);
-        updateFrameViewCounts(frame, seed ? (seed.errLines || 0) : 0, seed ? (seed.warnLines || 0) : 0);
+        updateFrameViewCounts(frame, seed ? (seed.errEntries || 0) : 0, seed ? (seed.warnEntries || 0) : 0);
         renderFramesVisibility();
     }
 
@@ -855,11 +861,12 @@
         return null;
     }
 
-    // Label the frame's view dropdown with each bucket's line count and bold
-    // the ones that have any, so "Errors (3)" / "Warnings (2)" stand out and a
-    // clean pod just shows plain "Errors"/"Warnings". Native <select> option
-    // styling is unreliable (esp. in the macOS webview), so we also flag the
-    // collapsed control when an issue view is the current selection.
+    // Label the frame's view dropdown with each bucket's entry count and bold
+    // the ones that have any, so "Errors (~3)" / "Warnings (~2)" stand out and
+    // a clean pod just shows plain "Errors"/"Warnings". The count is an
+    // approximate entry tally (a multi-line entry counts once), hence the "~".
+    // Native <select> option styling is unreliable (esp. in the macOS webview),
+    // so we also flag the collapsed control when an issue view is selected.
     function updateFrameViewCounts(frame, errCount, warnCount) {
         var sel = frame.el.querySelector('.watch-frame-view');
         if (!sel) return;
@@ -870,7 +877,7 @@
             var v = opts[i].value;
             var n = v === 'errors' ? errCount : v === 'warnings' ? warnCount : 0;
             var base = v === 'errors' ? 'Errors' : v === 'warnings' ? 'Warnings' : 'All';
-            opts[i].textContent = n > 0 ? base + ' (' + n + ')' : base;
+            opts[i].textContent = n > 0 ? base + ' (~' + n + ')' : base;
             opts[i].classList.toggle('has-issues', n > 0);
             opts[i].style.fontWeight = n > 0 ? '700' : '';
         }
@@ -882,7 +889,7 @@
     function syncFrameCounts() {
         for (var key in frames) {
             var st = streamStatusFor(frames[key].ctx, frames[key].ns, frames[key].pod);
-            if (st) updateFrameViewCounts(frames[key], st.errLines || 0, st.warnLines || 0);
+            if (st) updateFrameViewCounts(frames[key], st.errEntries || 0, st.warnEntries || 0);
         }
     }
 

@@ -133,9 +133,9 @@ func (h *handlers) WatchNoNewStreams(c rweb.Context) error {
 	return c.WriteJSON(map[string]bool{"noNewStreams": *body.NoNewStreams})
 }
 
-// WatchSetMax sets the cap on concurrently active streams (the UI slider).
-// Body: {"max": N}. The manager clamps to its allowed range and returns the
-// applied value.
+// WatchSetMax sets the cap on the total streams kept in the list (the UI
+// stepper). Body: {"max": N}. The manager clamps to its allowed range and
+// returns the applied value.
 func (h *handlers) WatchSetMax(c rweb.Context) error {
 	var body struct {
 		Max *int `json:"max"`

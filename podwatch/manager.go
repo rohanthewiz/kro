@@ -21,10 +21,13 @@ import (
 )
 
 const (
-	// The cap on concurrently active (starting|running|paused) log streams
-	// across all watch sessions is runtime-settable via SetMaxStreams
-	// (driven by the UI slider); these bound it.
-	defaultMaxStreams = 10
+	// The cap on the total number of log streams kept in the list (active
+	// plus ended) across all watch sessions, runtime-settable via
+	// SetMaxStreams (driven by the UI stepper); these bound it. When the list
+	// is full, admitting a new stream evicts the oldest ended one so the list
+	// is a rolling window of the most recent streams. Active streams are never
+	// evicted, so a list already full of active streams blocks new pods.
+	defaultMaxStreams = 15
 	absMaxStreams     = 100
 
 	ringLines           = 2000 // per-stream replay buffer for console tees
@@ -105,8 +108,8 @@ type Stream struct {
 	StartedAt time.Time
 
 	LineCount  atomic.Int64
-	ErrCount   atomic.Int64 // lines routed to the errors companion (== its line count)
-	WarnCount  atomic.Int64 // lines routed to the warnings companion (== its line count)
+	ErrCount   atomic.Int64 // approx. error entries: ticks on new-level lines, not inherited continuations
+	WarnCount  atomic.Int64 // approx. warning entries: ticks on new-level lines, not inherited continuations
 	LastLineAt atomic.Int64 // unix nanos of the last captured line
 
 	mu       sync.Mutex
@@ -138,8 +141,8 @@ type StreamStatus struct {
 	File         string    `json:"file"`
 	StartedAt    time.Time `json:"startedAt"`
 	Lines        int64     `json:"lines"`
-	ErrLines     int64     `json:"errLines"`  // lines captured to the errors companion
-	WarnLines    int64     `json:"warnLines"` // lines captured to the warnings companion
+	ErrEntries   int64     `json:"errEntries"`  // approximate error entries (see Stream.ErrCount)
+	WarnEntries  int64     `json:"warnEntries"` // approximate warning entries (see Stream.WarnCount)
 	LastActivity time.Time `json:"lastActivity,omitzero"`
 	Error        string    `json:"error,omitempty"`
 }
@@ -155,6 +158,7 @@ type SessionStatus struct {
 type StatusPayload struct {
 	MaxStreams    int             `json:"maxStreams"`
 	ActiveStreams int             `json:"activeStreams"`
+	TotalStreams  int             `json:"totalStreams"` // active + ended streams in the list; capped at MaxStreams
 	Sessions      []SessionStatus `json:"sessions"`
 }
 
@@ -169,9 +173,11 @@ func NewManager(clientFn func(string) (*kubernetes.Clientset, error), logDir str
 	return m
 }
 
-// SetMaxStreams sets the cap on concurrently active streams, clamped to
-// [1, absMaxStreams]. Lowering it below the current active count only blocks
-// new streams; existing ones are unaffected. Returns the applied value.
+// SetMaxStreams sets the cap on the total streams kept in the list, clamped to
+// [1, absMaxStreams]. Lowering it does not retroactively evict streams already
+// listed; the new cap takes hold as pods arrive (each admission trims the list
+// back within the cap by dropping the oldest ended streams). Returns the
+// applied value.
 func (m *Manager) SetMaxStreams(n int) int {
 	n = max(1, min(n, absMaxStreams))
 	m.maxStreams.Store(int64(n))
@@ -341,6 +347,7 @@ func (m *Manager) Status() StatusPayload {
 		sessions = append(sessions, s)
 	}
 	active := m.activeStreamCountLocked()
+	total := m.totalStreamCountLocked()
 	m.mu.Unlock()
 
 	sort.Slice(sessions, func(i, j int) bool {
@@ -350,7 +357,7 @@ func (m *Manager) Status() StatusPayload {
 		return sessions[i].Namespace < sessions[j].Namespace
 	})
 
-	out := StatusPayload{MaxStreams: m.maxStreamsNow(), ActiveStreams: active, Sessions: []SessionStatus{}}
+	out := StatusPayload{MaxStreams: m.maxStreamsNow(), ActiveStreams: active, TotalStreams: total, Sessions: []SessionStatus{}}
 	for _, s := range sessions {
 		out.Sessions = append(out.Sessions, m.sessionStatus(s))
 	}
@@ -392,6 +399,53 @@ func (m *Manager) activeStreamCountLocked() int {
 		}
 	}
 	return n
+}
+
+// totalStreamCountLocked is the number of streams in the list (active plus
+// ended) across all sessions — the quantity the stream cap bounds.
+func (m *Manager) totalStreamCountLocked() int {
+	n := 0
+	for _, sess := range m.sessions {
+		n += len(sess.streams)
+	}
+	return n
+}
+
+// evictOldestTerminalLocked removes up to n of the oldest ended (terminal)
+// streams across all sessions, oldest-started first, to make room under the
+// whole-list cap. Active streams are never touched; log files are kept (like
+// ClearTerminal). Returns how many were removed. Caller holds m.mu.
+func (m *Manager) evictOldestTerminalLocked(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	type ref struct {
+		sess    *Session
+		pod     string
+		started time.Time // immutable after creation; safe to read without st.mu
+	}
+	var terms []ref
+	for _, sess := range m.sessions {
+		for pod, st := range sess.streams {
+			st.mu.Lock()
+			terminal := st.state.terminal()
+			st.mu.Unlock()
+			if terminal {
+				terms = append(terms, ref{sess, pod, st.StartedAt})
+			}
+		}
+	}
+	sort.Slice(terms, func(i, j int) bool { return terms[i].started.Before(terms[j].started) })
+
+	removed := 0
+	for _, r := range terms {
+		if removed >= n {
+			break
+		}
+		delete(r.sess.streams, r.pod)
+		removed++
+	}
+	return removed
 }
 
 // StreamAction applies a user action ("stop"|"pause"|"resume"|"remove") to
@@ -637,7 +691,7 @@ func (m *Manager) runCountsTicker(sess *Session) {
 				continue
 			}
 			c := map[string]any{"pod": st.Pod, "lines": st.LineCount.Load(),
-				"errLines": st.ErrCount.Load(), "warnLines": st.WarnCount.Load()}
+				"errEntries": st.ErrCount.Load(), "warnEntries": st.WarnCount.Load()}
 			if n := st.LastLineAt.Load(); n > 0 {
 				c["lastActivity"] = time.Unix(0, n)
 			}
