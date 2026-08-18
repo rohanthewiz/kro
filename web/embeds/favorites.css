@@ -1,0 +1,339 @@
+/* Favorites — the ★ chip strip under the header, the header star toggle, and
+   the Cmd/Ctrl+K quick switcher.
+
+   Colour convention follows header.css: light theme rules first, then a
+   `body.dark` block at the bottom. No CSS variables anywhere in this project,
+   so the two palettes are written out explicitly.
+
+   Layout:
+     .fav-bar   [ ★ ][ chips … flex-wrap … ][ ⌕ Ctrl K ]
+                       └ .fav-chip (draggable) = badge + label + ×            */
+
+.fav-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: -8px 0 16px;
+    padding: 7px 12px;
+    background: #f2f8f8;
+    border: 1px solid #dfe9ec;
+    border-radius: 9px;
+}
+.fav-bar-label {
+    flex: none;
+    font-size: 0.95rem;
+    line-height: 1;
+    color: #f0a500;
+    cursor: help;
+    user-select: none;
+}
+.fav-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.fav-empty {
+    font-size: 0.76rem;
+    font-style: italic;
+    color: #b2bec3;
+}
+
+/* One saved destination. The whole chip is the click target; the × is an
+   overlaid child that stops propagation so removing never navigates. */
+.fav-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 300px;
+    padding: 4px 7px 4px 8px;
+    background: #fff;
+    border: 1px solid #ccdce0;
+    border-bottom: 1px solid #00b894;
+    border-radius: 7px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #2d3436;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.12s, border-color 0.12s, transform 0.12s, box-shadow 0.12s;
+}
+.fav-chip:hover {
+    background: #eafaf5;
+    border-color: #00b894;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 6px rgba(0,184,148,0.22);
+}
+/* The chip pointing at the live selection — filled, so "where am I" is
+   answerable without reading the dropdowns. */
+.fav-chip.current {
+    background: rgba(0,184,148,0.14);
+    border-color: #00b894;
+    box-shadow: inset 0 0 0 1px rgba(0,184,148,0.35);
+}
+.fav-chip.dragging { opacity: 0.4; }
+/* Drop indicator while dragging a chip over a sibling. */
+.fav-chip.drop-before { box-shadow: -3px 0 0 0 #0984e3; }
+.fav-chip.drop-after  { box-shadow: 3px 0 0 0 #0984e3; }
+
+/* Ctrl+<n> hotkey badge — only the first nine chips get one. */
+.fav-chip-badge {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 3px;
+    border-radius: 4px;
+    background: rgba(9,132,227,0.12);
+    color: #0984e3;
+    font-size: 0.62rem;
+    font-weight: 700;
+    line-height: 1;
+}
+.fav-chip-ctx {
+    color: #0984e3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.fav-chip-sep { color: #b2bec3; font-weight: 400; }
+.fav-chip-ns {
+    color: #2d3436;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* A renamed favorite collapses ctx/ns into one label. */
+.fav-chip-label {
+    color: #2d3436;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.fav-chip-x {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    margin-left: 1px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: #b2bec3;
+    font-size: 0.78rem;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.fav-chip:hover .fav-chip-x { opacity: 1; }
+.fav-chip-x:hover { background: rgba(214,48,49,0.14); color: #d63031; }
+
+/* Header ★ toggle (shares .btn-ns sizing from header.css). */
+.btn-fav-toggle {
+    color: #f0a500;
+    background: rgba(240,165,0,0.08);
+    border-color: rgba(240,165,0,0.28);
+    font-size: 1.02rem;
+}
+.btn-fav-toggle:hover {
+    background: rgba(240,165,0,0.2);
+    border-color: #f0a500;
+    box-shadow: 0 1px 4px rgba(240,165,0,0.28);
+}
+.btn-fav-toggle.on {
+    background: rgba(240,165,0,0.24);
+    border-color: #f0a500;
+}
+
+/* Quick-switcher launcher button on the right of the strip. */
+.fav-switch-btn {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 9px;
+    background: #fff;
+    border: 1px solid #ccdce0;
+    border-radius: 7px;
+    color: #636e72;
+    font-size: 0.74rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.fav-switch-btn:hover { background: #eaf3fb; border-color: #0984e3; color: #0984e3; }
+.fav-switch-icon { font-size: 0.9rem; line-height: 1; }
+.fav-switch-keys {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(45,52,54,0.07);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.68rem;
+}
+
+/* ===== Quick switcher palette ===== */
+.fav-palette-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    background: rgba(0,0,0,0.42);
+    /* Sit the dialog in the upper third: the eye is already there after a
+       Cmd+K, and results grow downward without shifting the input. */
+    padding-top: 12vh;
+    justify-content: center;
+    align-items: flex-start;
+}
+.fav-palette-overlay.active { display: flex; }
+.fav-palette {
+    width: min(660px, 92vw);
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 18px 48px rgba(0,0,0,0.32);
+    overflow: hidden;
+}
+.fav-palette-input-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid #e8eef0;
+}
+.fav-palette-prompt { color: #b2bec3; font-size: 1.05rem; line-height: 1; }
+.fav-palette-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: #2d3436;
+    font-size: 1.02rem;
+    font-weight: 500;
+}
+.fav-palette-list {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 6px;
+}
+.fav-palette-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 10px;
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 0.88rem;
+}
+/* Keyboard cursor (↑↓). Mouse hover paints the same way so the two input
+   methods never disagree about what Enter would do — moving the mouse also
+   moves the selection index (see favorites.js). */
+.fav-palette-row.active { background: rgba(9,132,227,0.12); }
+.fav-palette-star { flex: none; width: 13px; color: #f0a500; font-size: 0.8rem; }
+.fav-palette-ctx { color: #0984e3; font-weight: 600; }
+.fav-palette-sep { color: #b2bec3; }
+.fav-palette-ns { color: #2d3436; font-weight: 600; }
+.fav-palette-tag {
+    margin-left: auto;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(45,52,54,0.07);
+    color: #636e72;
+    font-size: 0.68rem;
+    font-weight: 600;
+}
+/* Substring highlight on the matched run of characters. */
+.fav-palette-row mark {
+    background: rgba(253,203,110,0.55);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+}
+.fav-palette-empty {
+    padding: 16px;
+    text-align: center;
+    color: #b2bec3;
+    font-size: 0.84rem;
+    font-style: italic;
+}
+.fav-palette-hint {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    padding: 8px 14px;
+    border-top: 1px solid #e8eef0;
+    background: #f7fafb;
+    font-size: 0.7rem;
+    color: #b2bec3;
+}
+.fav-key {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(45,52,54,0.08);
+    color: #636e72;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.66rem;
+}
+.fav-key-desc { margin-right: 8px; }
+
+/* Brief flash on the header selectors after a hotkey jump, so a switch the
+   user triggered without looking is still visibly acknowledged. */
+@keyframes kroFavFlash {
+    0%   { box-shadow: 0 0 0 0 rgba(0,184,148,0.55); }
+    100% { box-shadow: 0 0 0 7px rgba(0,184,148,0); }
+}
+.header-selectors.fav-flash .selector-group { animation: kroFavFlash 0.5s ease-out; }
+
+/* ===== Dark theme ===== */
+body.dark .fav-bar { background: #21262b; border-color: #2f3640; }
+body.dark .fav-empty { color: #636e72; }
+body.dark .fav-chip {
+    background: #2a2f36;
+    border-color: #3d4450;
+    border-bottom-color: #00b894;
+    color: #e0e0e0;
+}
+body.dark .fav-chip:hover { background: rgba(0,184,148,0.12); border-color: #00b894; }
+body.dark .fav-chip.current {
+    background: rgba(0,184,148,0.2);
+    border-color: #00b894;
+    box-shadow: inset 0 0 0 1px rgba(0,184,148,0.45);
+}
+body.dark .fav-chip-ctx { color: #54a0ff; }
+body.dark .fav-chip-ns, body.dark .fav-chip-label { color: #e0e0e0; }
+body.dark .fav-chip-sep { color: #636e72; }
+body.dark .fav-chip-badge { background: rgba(84,160,255,0.18); color: #54a0ff; }
+body.dark .fav-chip-x { color: #636e72; }
+body.dark .fav-chip-x:hover { background: rgba(214,48,49,0.22); color: #ff7675; }
+body.dark .btn-fav-toggle {
+    color: #fdcb6e;
+    background: rgba(253,203,110,0.1);
+    border-color: rgba(253,203,110,0.3);
+}
+body.dark .btn-fav-toggle:hover { background: rgba(253,203,110,0.22); border-color: #fdcb6e; }
+body.dark .btn-fav-toggle.on { background: rgba(253,203,110,0.26); border-color: #fdcb6e; }
+body.dark .fav-bar-label { color: #fdcb6e; }
+body.dark .fav-switch-btn { background: #2a2f36; border-color: #3d4450; color: #b2bec3; }
+body.dark .fav-switch-btn:hover { background: rgba(84,160,255,0.14); border-color: #54a0ff; color: #54a0ff; }
+body.dark .fav-switch-keys { background: rgba(224,224,224,0.1); }
+body.dark .fav-palette { background: #24292e; box-shadow: 0 18px 48px rgba(0,0,0,0.6); }
+body.dark .fav-palette-input-row { border-bottom-color: #2f3640; }
+body.dark .fav-palette-input { color: #e0e0e0; }
+body.dark .fav-palette-row.active { background: rgba(84,160,255,0.18); }
+body.dark .fav-palette-ctx { color: #54a0ff; }
+body.dark .fav-palette-ns { color: #e0e0e0; }
+body.dark .fav-palette-star { color: #fdcb6e; }
+body.dark .fav-palette-tag { background: rgba(224,224,224,0.1); color: #b2bec3; }
+body.dark .fav-palette-row mark { background: rgba(253,203,110,0.3); color: #fdcb6e; }
+body.dark .fav-palette-hint { background: #1f2429; border-top-color: #2f3640; color: #636e72; }
+body.dark .fav-key { background: rgba(224,224,224,0.1); color: #b2bec3; }

@@ -81,6 +81,11 @@ func (h HeaderBar) Render(b *element.Builder) any {
 					b.Input("type", "text", "id", "ns-add-input", "class", "selector ns-add-input", "placeholder", "namespace name", "autocomplete", "off").R(),
 					b.Button("type", "button", "id", "btn-ns-add", "class", "btn-ns btn-ns-add", "title", "Add namespace").T("+"),
 					b.Button("type", "button", "id", "btn-ns-remove", "class", "btn-ns btn-ns-remove", "title", "Remove selected namespace").T("−"),
+					// Star toggles the current Cluster/NS pair in the favorites
+					// bar below the header. favorites.js swaps the `on` class
+					// (and the glyph) to reflect the current selection.
+					b.Button("type", "button", "id", "btn-fav-toggle", "class", "btn-ns btn-fav-toggle",
+						"title", "Save this Cluster / NS as a favorite").T("☆"),
 				),
 			),
 		),

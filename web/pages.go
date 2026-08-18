@@ -37,12 +37,15 @@ func renderPage(buildNumber, buildMessage, buildHash string) string {
 			b.Meta("name", "viewport", "content", "width=device-width, initial-scale=1").R(),
 			b.Title().T(pageName),
 			b.Style().T(headerCSS),
+			b.Style().T(favoritesCSS),
 			b.Style().T(resourcesCSS),
 			b.Style().T(watchCSS),
 		),
 		b.Body("class", "dark").R(
 			b.DivClass("container").R(
 				HeaderBar{Title: "KRo", Version: buildNumber, VersionMessage: buildMessage, VersionHash: buildHash}.Render(b),
+
+				favoritesBar(b),
 
 				b.DivClass("summary-bar").R(
 					summaryCard(b, "jobs", "Jobs", "summary-jobs"),
@@ -54,6 +57,7 @@ func renderPage(buildNumber, buildMessage, buildHash string) string {
 				tabLayout(b),
 			),
 			b.Script().T(resourcesJS),
+			b.Script().T(favoritesJS),
 			b.Script().T(watchJS),
 		),
 	)

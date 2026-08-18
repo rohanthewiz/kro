@@ -72,35 +72,45 @@
         });
     }
 
+    // renderNsOptions repaints the NS dropdown from a namespace list and returns
+    // the namespace that ended up selected. Shared by the /api/namespaces load
+    // and by kroSwitchTarget (which gets the list back in its own response, so
+    // a favorite jump never needs a second fetch to redraw the dropdown).
+    function renderNsOptions(list, current) {
+        var sel = document.getElementById('ns-select');
+        var removeBtn = document.getElementById('btn-ns-remove');
+        sel.innerHTML = '';
+        list = list || [];
+        list.forEach(function(n) {
+            var opt = document.createElement('option');
+            opt.value = n;
+            opt.textContent = n;
+            sel.appendChild(opt);
+        });
+        if (list.length === 0) {
+            var opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = '— click + to add —';
+            opt.disabled = true;
+            sel.appendChild(opt);
+            sel.value = '';
+            if (removeBtn) removeBtn.disabled = true;
+        } else {
+            sel.value = current || list[0] || '';
+            if (removeBtn) removeBtn.disabled = false;
+        }
+        return sel.value || '';
+    }
+
     function loadNamespaces() {
         return fetch('/api/namespaces').then(function(r) { return r.json(); }).then(function(data) {
-            var sel = document.getElementById('ns-select');
-            var removeBtn = document.getElementById('btn-ns-remove');
-            sel.innerHTML = '';
-            var list = data.namespaces || [];
-            list.forEach(function(n) {
-                var opt = document.createElement('option');
-                opt.value = n;
-                opt.textContent = n;
-                sel.appendChild(opt);
-            });
-            if (list.length === 0) {
-                var opt = document.createElement('option');
-                opt.value = '';
-                opt.textContent = '— click + to add —';
-                opt.disabled = true;
-                sel.appendChild(opt);
-                sel.value = '';
-                removeBtn.disabled = true;
-            } else {
-                sel.value = data.current || list[0] || '';
-                removeBtn.disabled = false;
-            }
-            currentNs = sel.value || '';
+            currentNs = renderNsOptions(data.namespaces, data.current);
             // Keep the Pod Watch namespace picker in sync if it's already built
             // — the context (and thus its namespace list) may have just changed
             // while the Watch tab is the active view.
             if (window.watchPageSelectionChanged) window.watchPageSelectionChanged();
+            // Favorites bar: repaint the ★ toggle and the "current" chip.
+            if (window.kroFavoritesSelectionChanged) window.kroFavoritesSelectionChanged();
             return currentNs;
         });
     }
@@ -167,6 +177,7 @@
             updateTermTarget();
             refreshResources();
             initResourcesStream();
+            if (window.kroFavoritesSelectionChanged) window.kroFavoritesSelectionChanged();
         });
     }
 
@@ -195,6 +206,51 @@
             });
         });
     }
+
+    // ===== Public selection API (used by favorites.js) =====
+
+    // kroCurrentSelection mirrors the server cookies as this page last saw them.
+    window.kroCurrentSelection = function() {
+        return { context: currentCtx, namespace: currentNs };
+    };
+
+    // kroSwitchTarget jumps to an arbitrary (cluster, namespace) in ONE request.
+    // /api/favorites/go validates the context, pins the namespace, writes both
+    // cookies and hands back the new namespace list, so we can repaint both
+    // dropdowns and kick off the reload without any further round trips —
+    // that's what makes a chip click / Ctrl+<n> feel instant.
+    // Pass an empty ns to land on whatever that cluster last showed.
+    window.kroSwitchTarget = function(ctx, ns) {
+        return fetch('/api/favorites/go', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ context: ctx || '', namespace: ns || '' })
+        }).then(function(r) { return r.json(); }).then(function(data) {
+            if (data.error) { alert('Switch failed: ' + data.error); return null; }
+
+            currentCtx = data.context || currentCtx;
+            currentNs = renderNsOptions(data.namespaces, data.namespace);
+
+            var ctxSel = document.getElementById('ctx-select');
+            if (ctxSel) {
+                ctxSel.value = currentCtx;
+                // The kubeconfig may have gained contexts since this page
+                // loaded (e.g. a merge in another tab); if the option isn't
+                // there the assignment above silently leaves an empty select,
+                // so rebuild the list and try again.
+                if (ctxSel.value !== currentCtx) {
+                    loadContexts().then(function() { ctxSel.value = currentCtx; });
+                }
+            }
+
+            updateTermTarget();
+            refreshResources();
+            initResourcesStream();
+            if (window.watchPageSelectionChanged) window.watchPageSelectionChanged();
+            if (window.kroFavoritesSelectionChanged) window.kroFavoritesSelectionChanged();
+            return data;
+        });
+    };
 
     function onNamespaceChange() {
         var ns = document.getElementById('ns-select').value;

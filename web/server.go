@@ -61,6 +61,15 @@ func NewServer(cfg config.Config, reg *kube.ClientRegistry, store *state.Store, 
 	svr.Delete("/api/namespaces", h.RemoveNamespace)
 	svr.Post("/api/select", h.Select)
 	svr.Post("/api/kubeconfig/merge", h.MergeKubeconfig)
+	// Favorites: saved cluster/namespace destinations behind the ★ chip bar,
+	// the Ctrl+1..9 hotkeys, and the Cmd/Ctrl+K quick switcher.
+	svr.Get("/api/favorites", h.Favorites)
+	svr.Post("/api/favorites", h.AddFavorite)
+	svr.Delete("/api/favorites", h.RemoveFavorite)
+	svr.Post("/api/favorites/label", h.LabelFavorite)
+	svr.Post("/api/favorites/reorder", h.ReorderFavorites)
+	svr.Post("/api/favorites/go", h.GoToTarget)
+	svr.Get("/api/targets", h.Targets)
 	svr.Get("/api/resources", h.Resources)
 	svr.Get("/api/describe", h.Describe)
 	svr.Get("/api/logs", h.Logs)

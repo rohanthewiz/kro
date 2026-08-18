@@ -9,6 +9,23 @@ live updates over SSE, no cluster-side install.
 - Loads `~/.kube/config` (or `$KUBECONFIG`) on startup; lists every context.
 - Per-cluster pinned namespace lists you build up yourself (add `+`, remove `×`).
   Stored as a small JSON file at `os.UserConfigDir()/kro/state.json`.
+- Favorite Cluster/Namespace combos with three ways to reach them:
+  - **★ chip bar** under the header — one chip per saved combo; click to switch
+    both cluster and namespace at once, drag to reorder, double-click to give a
+    chip a custom label, `×` to remove.
+  - **Ctrl+1 … Ctrl+9** — jump straight to the Nth chip from anywhere on the
+    page (Ctrl, not Cmd, on every platform: macOS reserves Cmd+digit).
+    `Ctrl+Shift+D` stars/unstars the current selection.
+  - **Cmd+K / Ctrl+K quick switcher** — a search palette over every known
+    destination (favorites first, then pinned namespaces, then each cluster's
+    kubeconfig default). Type `cluster/namespace` to jump somewhere not pinned
+    yet; ↑↓ + Enter to switch.
+
+  Add the current pair with the ★ next to the NS dropdown. Favorites live in
+  the same `state.json`, so they survive restarts and are shared by every
+  browser pointed at the instance. A switch is a single request
+  (`POST /api/favorites/go`) that sets both cookies and returns the new
+  namespace list, so the header repaints without further round trips.
 - Hierarchical resource tree: Jobs, Deployments+ReplicaSets+Pods, StatefulSets,
   DaemonSets, plus flat read-only listings for Services, Ingresses, ConfigMaps,
   Secrets, and storage (PersistentVolumes, PersistentVolumeClaims, StorageClasses).
@@ -108,7 +125,7 @@ Requires Go 1.26+.
 | `KRO_PORT`          | `8222`                               | HTTP listen port                         |
 | `KRO_VERBOSE`       | `false`                              | rweb request logging                     |
 | `KUBECONFIG`        | `~/.kube/config`                     | Kubeconfig file (colon-separated merges) |
-| `KRO_STATE_FILE`    | `os.UserConfigDir()/kro/state.json`  | Pinned-namespaces JSON file              |
+| `KRO_STATE_FILE`    | `os.UserConfigDir()/kro/state.json`  | Pinned namespaces + favorites JSON file  |
 | `KRO_WATCH_LOG_DIR` | `os.UserConfigDir()/kro/watch-logs`  | Pod Watch per-pod log files directory    |
 | `KRO_WATCH_LOG_RETENTION_DAYS` | `7`                       | Auto-delete watch logs older than this (`0` disables) |
 | `KRO_POD_READY_TIMEOUT` | `10m`                            | How long Pod Watch waits for a new pod's logs to become available before flagging the stream (Go duration, e.g. `7m30s`); raise it for pods that are slow to start |
@@ -132,6 +149,13 @@ web/      rweb routes, handlers, SSE feeder, page render, embedded CSS/JS
 | POST   | `/api/namespaces`          | Pin a namespace `{namespace, select?}`                 |
 | DELETE | `/api/namespaces?name=...` | Unpin a namespace                                      |
 | POST   | `/api/select`              | Set active `{context?, namespace?}` cookies            |
+| GET    | `/api/favorites`           | Ordered favorites + whether the active pair is starred  |
+| POST   | `/api/favorites`           | Star `{context?, namespace?, label?}` (defaults to active) |
+| DELETE | `/api/favorites?context=&namespace=` | Unstar (defaults to the active pair)         |
+| POST   | `/api/favorites/label`     | Rename a favorite `{context, namespace, label}`        |
+| POST   | `/api/favorites/reorder`   | Persist chip order `{favorites:[{context,namespace}]}` |
+| POST   | `/api/favorites/go`        | Switch to `{context, namespace}` in one round trip: pins the namespace, sets both cookies, returns the new namespace list |
+| GET    | `/api/targets`             | Every destination for the quick switcher (no cluster calls) |
 | POST   | `/api/kubeconfig/merge`    | Upload a kubeconfig snippet (multipart `file`), merge into the primary kubeconfig, reload contexts |
 | GET    | `/api/resources`           | One-shot resource tree                                 |
 | GET    | `/api/describe?kind=&name=`| kubectl-describe text                                  |

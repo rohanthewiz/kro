@@ -1,4 +1,5 @@
-// Package state persists the per-cluster pinned namespace lists to a small
+// Package state persists the per-cluster pinned namespace lists, the last-used
+// selection, and the user's starred cluster/namespace favorites to a small
 // JSON file on disk. Reads are O(in-memory map); writes flush the whole file
 // (the data is tiny — a few strings per cluster — and writes are infrequent).
 package state
@@ -16,7 +17,8 @@ import (
 const stateFileName = "state.json"
 
 // DefaultPath returns the path used when KRO_STATE_FILE is unset:
-//   $KRO_STATE_FILE  →  $XDG_CONFIG_HOME/kro/state.json (or os.UserConfigDir()).
+//
+//	$KRO_STATE_FILE  →  $XDG_CONFIG_HOME/kro/state.json (or os.UserConfigDir()).
 func DefaultPath() (string, error) {
 	if p := os.Getenv("KRO_STATE_FILE"); p != "" {
 		return p, nil
@@ -39,7 +41,29 @@ type data struct {
 	// startup instead of snapping back to the kubeconfig defaults.
 	LastContext   string            `json:"lastContext,omitempty"`
 	LastNamespace map[string]string `json:"lastNamespace,omitempty"` // contextName -> namespace
+
+	// Favorites is an ORDERED list of cluster/namespace pairs the user has
+	// starred. Order is meaningful and user-controlled: the UI numbers the
+	// first nine as Ctrl+1..Ctrl+9 hotkeys, so we deliberately do not sort
+	// this list the way Namespaces is sorted.
+	Favorites []Favorite `json:"favorites,omitempty"`
 }
+
+// Favorite is one saved cluster/namespace destination.
+//
+// Label is an optional user-supplied display name; when empty the UI renders
+// "context / namespace". Storing it here (rather than in localStorage) keeps a
+// favorite meaningful across browsers, which is the whole point of the file.
+type Favorite struct {
+	Context   string `json:"context"`
+	Namespace string `json:"namespace"`
+	Label     string `json:"label,omitempty"`
+}
+
+// favKey is the identity of a favorite: the (context, namespace) pair. Label is
+// not part of identity, so re-adding an existing pair with a new label edits
+// it in place instead of creating a duplicate chip.
+func favKey(ctx, ns string) string { return ctx + "\x00" + ns }
 
 // Store is a goroutine-safe handle to the JSON state file.
 type Store struct {
@@ -175,6 +199,140 @@ func (s *Store) SetLast(ctx, ns string) error {
 		return nil
 	}
 	return s.saveLocked()
+}
+
+// ----- Favorites -----
+//
+// A favorite is a (context, namespace) destination the user wants one-click /
+// one-keystroke access to. The list is ordered by the user (chips render in
+// list order and the first nine get Ctrl+1..9 hotkeys), so every mutation
+// below preserves position rather than sorting.
+
+// Favorites returns a copy of the ordered favorites list.
+func (s *Store) Favorites() []Favorite {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Favorite, len(s.d.Favorites))
+	copy(out, s.d.Favorites)
+	return out
+}
+
+// IsFavorite reports whether (ctx, ns) is currently starred.
+func (s *Store) IsFavorite(ctx, ns string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.indexOfFavLocked(ctx, ns) >= 0
+}
+
+// AddFavorite stars (ctx, ns), appending it to the end of the list so existing
+// hotkey numbers don't shift under the user. If the pair is already starred,
+// only its label is updated (an empty label leaves the existing one alone, so
+// re-starring never silently wipes a name the user typed).
+// Returns true when something changed.
+func (s *Store) AddFavorite(ctx, ns, label string) (bool, error) {
+	if ctx == "" || ns == "" {
+		return false, serr.New("favorite requires both a context and a namespace")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if i := s.indexOfFavLocked(ctx, ns); i >= 0 {
+		if label == "" || s.d.Favorites[i].Label == label {
+			return false, nil
+		}
+		s.d.Favorites[i].Label = label
+		return true, s.saveLocked()
+	}
+
+	s.d.Favorites = append(s.d.Favorites, Favorite{Context: ctx, Namespace: ns, Label: label})
+	return true, s.saveLocked()
+}
+
+// RemoveFavorite unstars (ctx, ns). Returns true when the list changed.
+func (s *Store) RemoveFavorite(ctx, ns string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.indexOfFavLocked(ctx, ns)
+	if i < 0 {
+		return false, nil
+	}
+	s.d.Favorites = append(s.d.Favorites[:i], s.d.Favorites[i+1:]...)
+	return true, s.saveLocked()
+}
+
+// SetFavoriteLabel renames an existing favorite; an empty label clears the
+// custom name so the UI falls back to "context / namespace".
+// Returns true when the label actually changed.
+func (s *Store) SetFavoriteLabel(ctx, ns, label string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.indexOfFavLocked(ctx, ns)
+	if i < 0 {
+		return false, serr.New("not a favorite: " + ctx + "/" + ns)
+	}
+	if s.d.Favorites[i].Label == label {
+		return false, nil
+	}
+	s.d.Favorites[i].Label = label
+	return true, s.saveLocked()
+}
+
+// ReorderFavorites rewrites the list order from the (context, namespace) pairs
+// in order. Entries not mentioned in order keep their relative order at the
+// tail, and pairs in order that aren't favorites are ignored — so a stale
+// client (one that dragged a chip while another tab removed a favorite) can
+// never delete or resurrect an entry through this path; it can only permute.
+func (s *Store) ReorderFavorites(order []Favorite) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	placed := make(map[string]bool, len(s.d.Favorites))
+	out := make([]Favorite, 0, len(s.d.Favorites))
+	for _, want := range order {
+		i := s.indexOfFavLocked(want.Context, want.Namespace)
+		if i < 0 {
+			continue
+		}
+		k := favKey(want.Context, want.Namespace)
+		if placed[k] { // defend against a duplicated entry in the request
+			continue
+		}
+		placed[k] = true
+		out = append(out, s.d.Favorites[i])
+	}
+	for _, f := range s.d.Favorites {
+		if !placed[favKey(f.Context, f.Namespace)] {
+			out = append(out, f)
+		}
+	}
+	s.d.Favorites = out
+	return s.saveLocked()
+}
+
+// indexOfFavLocked returns the position of (ctx, ns) in the favorites list, or
+// -1. Callers must hold at least the read lock.
+func (s *Store) indexOfFavLocked(ctx, ns string) int {
+	for i, f := range s.d.Favorites {
+		if f.Context == ctx && f.Namespace == ns {
+			return i
+		}
+	}
+	return -1
+}
+
+// AllNamespaces returns a copy of the whole pinned map (context -> namespaces).
+// The quick-switcher palette uses it to offer every known destination without
+// hitting any cluster.
+func (s *Store) AllNamespaces() map[string][]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string][]string, len(s.d.Namespaces))
+	for ctx, list := range s.d.Namespaces {
+		cp := make([]string, len(list))
+		copy(cp, list)
+		out[ctx] = cp
+	}
+	return out
 }
 
 // saveLocked writes the file atomically (temp + rename) under the held lock.
