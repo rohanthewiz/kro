@@ -268,8 +268,8 @@
     // that shows cluster warnings. The watch tab owns no resource sections —
     // its panel is the Pod Watch page, built and managed by watch.js.
     var TAB_CONFIG = [
-        { id: 'workloads',   sections: ['jobs', 'all-pods', 'pods-orphan'] },
-        { id: 'deployments', sections: ['deployments', 'all-pods'] },
+        { id: 'workloads',   sections: ['jobs', 'all-pods'] },
+        { id: 'deployments', sections: ['deployments', 'deployment-pods'] },
         { id: 'networking',  sections: ['services', 'ingresses'] },
         { id: 'storage',     sections: ['pvs', 'pvcs', 'storageclasses'] },
         { id: 'sets',        sections: ['statefulsets', 'daemonsets'] },
@@ -411,86 +411,159 @@
         if (el) el.textContent = val;
     }
 
-    // Compute the flat "All Pods" list once per refresh — every workload kind
+    // Compute the flat "All Pods" list once per refresh. Every workload kind
     // contributes its child pods plus any orphans, sorted by name.
+    //
+    // Each entry is {pod, owner} rather than a bare pod: the owning controller
+    // is only knowable while walking down the tree, and the Owner column is
+    // what lets this single listing subsume the old separate "Pods (orphan)"
+    // section — an orphan is simply a row with an empty owner.
+    //
+    //   jobs        -> job/<name>
+    //   deployments -> rs/<name>      (or deploy/<name> for a direct child pod)
+    //   statefulsets-> sts/<name>
+    //   daemonsets  -> ds/<name>
+    //   orphan_pods -> ''             (rendered as an em dash)
     function buildAllPods(tree) {
         var all = [];
-        (tree.jobs || []).forEach(function(job) { (job.children || []).forEach(function(p) { all.push(p); }); });
-        (tree.deployments || []).forEach(function(d) { (d.children || []).forEach(function(rs) { (rs.children || []).forEach(function(p) { all.push(p); }); }); });
-        (tree.statefulsets || []).forEach(function(s) { (s.children || []).forEach(function(p) { all.push(p); }); });
-        (tree.daemonsets || []).forEach(function(s) { (s.children || []).forEach(function(p) { all.push(p); }); });
-        (tree.orphan_pods || []).forEach(function(p) { all.push(p); });
-        all.sort(function(a, b) { return (a.name || '').localeCompare(b.name || ''); });
+        function add(pod, owner) { all.push({ pod: pod, owner: owner }); }
+
+        (tree.jobs || []).forEach(function(job) {
+            (job.children || []).forEach(function(p) { add(p, 'job/' + job.name); });
+        });
+        (tree.deployments || []).forEach(function(d) {
+            (d.children || []).forEach(function(rs) {
+                // A deployment child is normally a ReplicaSet, but the tree
+                // hands back a bare Pod when the RS could not be resolved.
+                if (rs.kind === 'Pod') { add(rs, 'deploy/' + d.name); return; }
+                (rs.children || []).forEach(function(p) { add(p, 'rs/' + rs.name); });
+            });
+        });
+        (tree.statefulsets || []).forEach(function(s) {
+            (s.children || []).forEach(function(p) { add(p, 'sts/' + s.name); });
+        });
+        (tree.daemonsets || []).forEach(function(s) {
+            (s.children || []).forEach(function(p) { add(p, 'ds/' + s.name); });
+        });
+        (tree.orphan_pods || []).forEach(function(p) { add(p, ''); });
+
+        all.sort(function(a, b) { return (a.pod.name || '').localeCompare(b.pod.name || ''); });
         return all;
     }
 
-    // ===== All Pods filter =====
-    // The filter text is module state (not per-DOM) because "All Pods" renders
-    // in two tabs and the whole tree is re-rendered on every refresh/SSE push.
-    // Keeping it here lets applyPodFilter() restore the user's query after any
-    // rebuild instead of silently clearing it.
-    var allPodsFilter = '';
+    // Deployment-owned pods only, for the deployments tab. Same {pod, owner}
+    // shape as buildAllPods so both sections share the row/filter machinery.
+    function buildDeploymentPods(tree) {
+        var out = [];
+        (tree.deployments || []).forEach(function(d) {
+            (d.children || []).forEach(function(rs) {
+                if (rs.kind === 'Pod') { out.push({ pod: rs, owner: 'deploy/' + d.name }); return; }
+                (rs.children || []).forEach(function(p) { out.push({ pod: p, owner: 'rs/' + rs.name }); });
+            });
+        });
+        out.sort(function(a, b) { return (a.pod.name || '').localeCompare(b.pod.name || ''); });
+        return out;
+    }
 
-    function podFilterBar() {
-        return '<div class="pod-filter-bar">' +
+    // Shared body for the two flat pod listings: filter bar, owner-aware table,
+    // and the hidden "no matches" row the filter reveals.
+    function podListSection(slug, title, entries, emptyText) {
+        if (entries.length === 0) {
+            return sectionShell(slug, title, 0,
+                '<div class="table-wrapper"><div class="empty-state">' + emptyText + '</div></div>');
+        }
+        // The filter bar lives inside the section but outside the
+        // table-wrapper, so the collapse rule has to hide it explicitly —
+        // see resources.css.
+        var body = podFilterBar(slug) +
+            '<div class="table-wrapper"><table>' + tableHead(true) + '<tbody>';
+        entries.forEach(function(e) { body += parentRow('', e.pod, false, e.owner); });
+        // Placeholder row shown only when a filter matches nothing; keeping it
+        // in the DOM avoids re-rendering the table on every keystroke.
+        body += '<tr class="pod-filter-empty" style="display:none"><td colspan="12">' +
+            '<div class="empty-state">No pods match the filter</div></td></tr>';
+        body += '</tbody></table></div>';
+        return sectionShell(slug, title, entries.length, body);
+    }
+
+    // ===== Pod list filters =====
+    // Filter text is module state keyed by section slug, not DOM state: the
+    // pod listings re-render wholesale on every refresh/SSE push, and "All
+    // Pods" appears in more than one place, so applyPodFilter() restores the
+    // user's query after any rebuild instead of silently clearing it.
+    var POD_FILTER_SLUGS = ['all-pods', 'deployment-pods'];
+    var podFilters = {};
+
+    function podFilterBar(slug) {
+        var cur = podFilters[slug] || '';
+        return '<div class="pod-filter-bar' + (cur ? ' filtering' : '') + '">' +
             '<span class="pod-filter-icon">\u2315</span>' +
-            '<input type="text" class="pod-filter-input" placeholder="Filter pods by name\u2026" ' +
-            'value="' + escapeAttr(allPodsFilter) + '" ' +
-            'oninput="onPodFilterInput(this.value)" ' +
-            'onkeydown="if (event.key === \'Escape\') { onPodFilterInput(\'\'); this.blur(); }">' +
+            '<input type="text" class="pod-filter-input" placeholder="Filter pods by name or owner\u2026" ' +
+            'value="' + escapeAttr(cur) + '" ' +
+            'oninput="onPodFilterInput(\'' + slug + '\', this.value)" ' +
+            'onkeydown="if (event.key === \'Escape\') { onPodFilterInput(\'' + slug + '\', \'\'); this.blur(); }">' +
             '<button type="button" class="pod-filter-clear" title="Clear filter (Esc)" ' +
-            'onclick="onPodFilterInput(\'\')">\u00d7</button>' +
+            'onclick="onPodFilterInput(\'' + slug + '\', \'\')">\u00d7</button>' +
             '</div>';
     }
 
-    window.onPodFilterInput = function(value) {
-        allPodsFilter = value || '';
-        applyPodFilter();
+    window.onPodFilterInput = function(slug, value) {
+        podFilters[slug] = value || '';
+        applyPodFilter(slug);
     };
 
-    // Hide/show rows in every rendered "All Pods" section and keep the header
-    // count in sync ("matched / total" while filtering). Matching is a simple
-    // case-insensitive substring test on the pod name — cheap enough to run on
-    // each keystroke for the row counts we deal with, and predictable for the
-    // long generated pod names these listings are full of.
-    function applyPodFilter() {
-        var q = allPodsFilter.trim().toLowerCase();
-        var sections = document.querySelectorAll('[data-section="all-pods"]');
-        for (var i = 0; i < sections.length; i++) {
-            var sec = sections[i];
+    // Hide/show rows in every rendered instance of a pod listing and keep the
+    // header count in sync ("matched / total" while filtering). Matching is a
+    // case-insensitive substring test over the pod name and its owner — cheap
+    // enough per keystroke at these row counts, and matching the owner is what
+    // makes "rs/foo" or a bare owner-less pod findable now that orphans live in
+    // the same table.
+    function applyPodFilter(slug) {
+        var slugs = slug ? [slug] : POD_FILTER_SLUGS;
+        slugs.forEach(function(sl) {
+            var q = (podFilters[sl] || '').trim().toLowerCase();
+            var sections = document.querySelectorAll('[data-section="' + sl + '"]');
+            for (var i = 0; i < sections.length; i++) {
+                var sec = sections[i];
 
-            // Re-sync sibling inputs (the mirror in the other tab, and any
-            // input just recreated by a rebuild) without clobbering the caret
-            // of the one being typed in.
-            var inputs = sec.querySelectorAll('.pod-filter-input');
-            for (var k = 0; k < inputs.length; k++) {
-                if (inputs[k] !== document.activeElement && inputs[k].value !== allPodsFilter) {
-                    inputs[k].value = allPodsFilter;
+                // Re-sync sibling inputs (a mirror in another tab, or one just
+                // recreated by a rebuild) without clobbering the caret of the
+                // input currently being typed in.
+                var inputs = sec.querySelectorAll('.pod-filter-input');
+                for (var k = 0; k < inputs.length; k++) {
+                    if (inputs[k] !== document.activeElement && inputs[k].value !== q0(sl)) {
+                        inputs[k].value = q0(sl);
+                    }
                 }
+                var bar = sec.querySelector('.pod-filter-bar');
+                if (bar) bar.classList.toggle('filtering', q.length > 0);
+
+                var rows = sec.querySelectorAll('tbody tr');
+                var total = 0, shown = 0;
+                for (var j = 0; j < rows.length; j++) {
+                    var row = rows[j];
+                    if (row.className.indexOf('pod-filter-empty') !== -1) continue;
+                    total++;
+                    var nameCell = row.querySelector('.resource-name');
+                    var ownerCell = row.querySelector('.resource-owner');
+                    var hay = ((nameCell ? nameCell.textContent : '') + ' ' +
+                               (ownerCell ? ownerCell.textContent : '')).toLowerCase();
+                    var match = !q || hay.indexOf(q) !== -1;
+                    row.style.display = match ? '' : 'none';
+                    if (match) shown++;
+                }
+
+                var emptyRow = sec.querySelector('.pod-filter-empty');
+                if (emptyRow) emptyRow.style.display = (total > 0 && shown === 0) ? '' : 'none';
+
+                var count = sec.querySelector('.section-count');
+                if (count) count.textContent = q ? (shown + ' / ' + total) : total;
             }
-            var bar = sec.querySelector('.pod-filter-bar');
-            if (bar) bar.classList.toggle('filtering', q.length > 0);
-
-            var rows = sec.querySelectorAll('tbody tr');
-            var total = 0, shown = 0;
-            for (var j = 0; j < rows.length; j++) {
-                var row = rows[j];
-                if (row.className.indexOf('pod-filter-empty') !== -1) continue;
-                total++;
-                var nameCell = row.querySelector('.resource-name');
-                var name = nameCell ? nameCell.textContent.toLowerCase() : '';
-                var match = !q || name.indexOf(q) !== -1;
-                row.style.display = match ? '' : 'none';
-                if (match) shown++;
-            }
-
-            var emptyRow = sec.querySelector('.pod-filter-empty');
-            if (emptyRow) emptyRow.style.display = (total > 0 && shown === 0) ? '' : 'none';
-
-            var count = sec.querySelector('.section-count');
-            if (count) count.textContent = q ? (shown + ' / ' + total) : total;
-        }
+        });
     }
+
+    // Raw (untrimmed) filter text for a slug — what the input should display.
+    function q0(slug) { return podFilters[slug] || ''; }
 
     // SECTION_BUILDERS maps a section slug to the function that renders its
     // HTML. Builders are invoked per-tab; when a section appears in two tabs
@@ -501,26 +574,17 @@
             return sectionHierarchical('jobs', 'Jobs', ctx.tree.jobs || [], 'job');
         },
         'all-pods': function(ctx) {
-            var pods = ctx.allPods;
-            var body;
-            if (pods.length > 0) {
-                // The filter bar lives inside the section but outside the
-                // table-wrapper so the collapse rule (which hides only the
-                // wrapper) also has to hide it explicitly — see resources.css.
-                body = podFilterBar() +
-                    '<div class="table-wrapper"><table>' + tableHead() + '<tbody>';
-                pods.forEach(function(pod) { body += parentRow('', pod, false); });
-                // Placeholder row shown only when a filter matches nothing;
-                // keeping it in the DOM avoids re-rendering the table on
-                // every keystroke.
-                body += '<tr class="pod-filter-empty" style="display:none"><td colspan="11">' +
-                    '<div class="empty-state">No pods match the filter</div></td></tr>';
-                body += '</tbody></table></div>';
-            } else {
-                body = '<div class="table-wrapper"><div class="empty-state">No pods found</div></div>';
-            }
-            return sectionShell('all-pods', 'All Pods', pods.length, body);
+            // Orphans are part of this list (owner column shows an em dash),
+            // which is why no tab mounts 'pods-orphan' any more.
+            return podListSection('all-pods', 'All Pods', ctx.allPods, 'No pods found');
         },
+        'deployment-pods': function(ctx) {
+            return podListSection('deployment-pods', 'Deployment Pods', ctx.deploymentPods,
+                'No deployment pods found');
+        },
+        // Retained but unmounted: "Pods (orphan)" was folded into All Pods via
+        // the Owner column. Kept here in case a tab wants the isolated view
+        // back — add 'pods-orphan' to that tab's sections in TAB_CONFIG.
         'pods-orphan': function(ctx) {
             var orphans = ctx.tree.orphan_pods || [];
             if (orphans.length === 0) return '';
@@ -598,7 +662,7 @@
     }
 
     function rebuildTables(tree) {
-        var ctx = { tree: tree, allPods: buildAllPods(tree) };
+        var ctx = { tree: tree, allPods: buildAllPods(tree), deploymentPods: buildDeploymentPods(tree) };
 
         // Group warnings by the tab whose resources they concern, so each
         // panel only shows the RBAC gaps relevant to what it renders.
@@ -620,8 +684,8 @@
             anchor.innerHTML = html;
         }
 
-        // Sections were just replaced wholesale; restore any active pod filter
-        // so a background refresh doesn't drop the user's query.
+        // Sections were just replaced wholesale; restore any active pod
+        // filters so a background refresh doesn't drop the user's query.
         applyPodFilter();
     }
 
@@ -732,9 +796,13 @@
         return sectionShell(slug, title, items.length, body);
     }
 
-    function tableHead() {
+    // withOwner adds an Owner column (used by the flat pod listings, where the
+    // controller isn't implied by an enclosing parent row).
+    function tableHead(withOwner) {
         return '<thead><tr>' +
-            '<th></th><th>Name</th><th>Kind</th><th>Status</th><th>Ready / Completions</th>' +
+            '<th></th><th>Name</th><th>Kind</th>' +
+            (withOwner ? '<th>Owner</th>' : '') +
+            '<th>Status</th><th>Ready / Completions</th>' +
             '<th>Age</th>' +
             '<th title="Sum of container CPU limits from the pod spec (* = from spec, not live usage)">CPU</th>' +
             '<th title="Sum of container memory limits from the pod spec (* = from spec, not live usage)">Memory</th>' +
@@ -764,16 +832,23 @@
         return btns;
     }
 
-    function parentRow(parentId, res, hasChildren) {
+    // owner is optional: pass a controller ref ('rs/foo', 'job/bar', or '' for
+    // an orphan) to render the Owner column that tableHead(true) declares.
+    // Leave it undefined for the hierarchical tables, which have no such column.
+    function parentRow(parentId, res, hasChildren, owner) {
         var arrow = hasChildren
             ? '<span class="expand-arrow" id="arrow-' + parentId + '">▶</span>'
             : '<span class="expand-arrow"></span>';
         var onclick = hasChildren ? ' onclick="toggleChildren(\'' + parentId + '\')"' : '';
         var cls = hasChildren ? 'resource-row' : '';
+        var ownerCell = owner === undefined ? '' :
+            '<td class="resource-owner' + (owner ? '' : ' orphan') + '">' +
+            (owner ? escapeHtml(owner) : '—') + '</td>';
         return '<tr class="' + cls + '"' + onclick + '>' +
             '<td>' + arrow + '</td>' +
             '<td class="resource-name">' + escapeHtml(res.name) + '</td>' +
             '<td>' + kindBadge(res.kind) + '</td>' +
+            ownerCell +
             '<td>' + statusBadge(res.status) + '</td>' +
             '<td>' + escapeHtml(res.completions || res.replicas || '-') + '</td>' +
             '<td>' + escapeHtml(res.age || '-') + '</td>' +

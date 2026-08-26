@@ -636,6 +636,17 @@ tbody td {
     font-size: 0.78rem;
 }
 
+/* Owner column of the flat pod listings: the controller ref that used to be
+   implied by which section a pod appeared in. */
+.resource-owner {
+    font-family: "SF Mono", "Fira Code", Menlo, monospace;
+    font-size: 0.72rem;
+    color: #636e72;
+    white-space: nowrap;
+}
+/* An owner-less pod — what the old "Pods (orphan)" section listed. */
+.resource-owner.orphan { color: #b2bec3; }
+
 /* All Pods filter bar */
 .pod-filter-bar {
     display: flex;
@@ -1087,6 +1098,8 @@ body.dark .kind-badge.persistentvolume { background: #14301f; color: #55efc4; }
 body.dark .kind-badge.persistentvolumeclaim { background: #16281f; color: #2ecc71; }
 body.dark .kind-badge.storageclass { background: #2d2a15; color: #f1c40f; }
 
+body.dark .resource-owner { color: #8d99a6; }
+body.dark .resource-owner.orphan { color: #636e72; }
 body.dark .empty-state { color: #636e72; }
 
 body.dark .pod-filter-bar {

@@ -81,9 +81,12 @@ func summaryCard(b *element.Builder, cls, label, valueID string) any {
 //
 // Panel composition:
 //
-//	workloads   — Terminal, Jobs, All Pods (+ Pods orphan if any); shown as "Pods"
+//	workloads   — Terminal, Jobs, All Pods; shown as "Pods". All Pods carries an
+//	              Owner column and subsumes the former "Pods (orphan)" section
+//	              (an orphan is a row with no owner).
 //	watch       — Pod Watch page (markup built by watch.js on first visit)
-//	deployments — Deployments & ReplicaSets, All Pods
+//	deployments — Deployments & ReplicaSets, Deployment Pods (deployment-owned
+//	              pods only, not the global All Pods list)
 //	networking  — Services, Ingresses
 //	storage     — PersistentVolumes, PersistentVolumeClaims, StorageClasses
 //	sets        — StatefulSets, DaemonSets
