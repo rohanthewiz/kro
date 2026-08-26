@@ -424,6 +424,74 @@
         return all;
     }
 
+    // ===== All Pods filter =====
+    // The filter text is module state (not per-DOM) because "All Pods" renders
+    // in two tabs and the whole tree is re-rendered on every refresh/SSE push.
+    // Keeping it here lets applyPodFilter() restore the user's query after any
+    // rebuild instead of silently clearing it.
+    var allPodsFilter = '';
+
+    function podFilterBar() {
+        return '<div class="pod-filter-bar">' +
+            '<span class="pod-filter-icon">\u2315</span>' +
+            '<input type="text" class="pod-filter-input" placeholder="Filter pods by name\u2026" ' +
+            'value="' + escapeAttr(allPodsFilter) + '" ' +
+            'oninput="onPodFilterInput(this.value)" ' +
+            'onkeydown="if (event.key === \'Escape\') { onPodFilterInput(\'\'); this.blur(); }">' +
+            '<button type="button" class="pod-filter-clear" title="Clear filter (Esc)" ' +
+            'onclick="onPodFilterInput(\'\')">\u00d7</button>' +
+            '</div>';
+    }
+
+    window.onPodFilterInput = function(value) {
+        allPodsFilter = value || '';
+        applyPodFilter();
+    };
+
+    // Hide/show rows in every rendered "All Pods" section and keep the header
+    // count in sync ("matched / total" while filtering). Matching is a simple
+    // case-insensitive substring test on the pod name — cheap enough to run on
+    // each keystroke for the row counts we deal with, and predictable for the
+    // long generated pod names these listings are full of.
+    function applyPodFilter() {
+        var q = allPodsFilter.trim().toLowerCase();
+        var sections = document.querySelectorAll('[data-section="all-pods"]');
+        for (var i = 0; i < sections.length; i++) {
+            var sec = sections[i];
+
+            // Re-sync sibling inputs (the mirror in the other tab, and any
+            // input just recreated by a rebuild) without clobbering the caret
+            // of the one being typed in.
+            var inputs = sec.querySelectorAll('.pod-filter-input');
+            for (var k = 0; k < inputs.length; k++) {
+                if (inputs[k] !== document.activeElement && inputs[k].value !== allPodsFilter) {
+                    inputs[k].value = allPodsFilter;
+                }
+            }
+            var bar = sec.querySelector('.pod-filter-bar');
+            if (bar) bar.classList.toggle('filtering', q.length > 0);
+
+            var rows = sec.querySelectorAll('tbody tr');
+            var total = 0, shown = 0;
+            for (var j = 0; j < rows.length; j++) {
+                var row = rows[j];
+                if (row.className.indexOf('pod-filter-empty') !== -1) continue;
+                total++;
+                var nameCell = row.querySelector('.resource-name');
+                var name = nameCell ? nameCell.textContent.toLowerCase() : '';
+                var match = !q || name.indexOf(q) !== -1;
+                row.style.display = match ? '' : 'none';
+                if (match) shown++;
+            }
+
+            var emptyRow = sec.querySelector('.pod-filter-empty');
+            if (emptyRow) emptyRow.style.display = (total > 0 && shown === 0) ? '' : 'none';
+
+            var count = sec.querySelector('.section-count');
+            if (count) count.textContent = q ? (shown + ' / ' + total) : total;
+        }
+    }
+
     // SECTION_BUILDERS maps a section slug to the function that renders its
     // HTML. Builders are invoked per-tab; when a section appears in two tabs
     // (e.g. "all-pods" in workloads and deployments) we render twice but the
@@ -436,8 +504,17 @@
             var pods = ctx.allPods;
             var body;
             if (pods.length > 0) {
-                body = '<div class="table-wrapper"><table>' + tableHead() + '<tbody>';
+                // The filter bar lives inside the section but outside the
+                // table-wrapper so the collapse rule (which hides only the
+                // wrapper) also has to hide it explicitly — see resources.css.
+                body = podFilterBar() +
+                    '<div class="table-wrapper"><table>' + tableHead() + '<tbody>';
                 pods.forEach(function(pod) { body += parentRow('', pod, false); });
+                // Placeholder row shown only when a filter matches nothing;
+                // keeping it in the DOM avoids re-rendering the table on
+                // every keystroke.
+                body += '<tr class="pod-filter-empty" style="display:none"><td colspan="11">' +
+                    '<div class="empty-state">No pods match the filter</div></td></tr>';
                 body += '</tbody></table></div>';
             } else {
                 body = '<div class="table-wrapper"><div class="empty-state">No pods found</div></div>';
@@ -542,6 +619,10 @@
             }
             anchor.innerHTML = html;
         }
+
+        // Sections were just replaced wholesale; restore any active pod filter
+        // so a background refresh doesn't drop the user's query.
+        applyPodFilter();
     }
 
     // ===== Section collapse/expand =====

@@ -512,6 +512,9 @@ body.dark .tab-collapse-toggle:hover { color: #74b9ff; border-color: #74b9ff; }
     transform: rotate(0deg);
 }
 .resource-section.collapsed .table-wrapper { display: none; }
+/* The pod filter bar sits outside .table-wrapper, so collapsing the section
+   has to hide it explicitly as well. */
+.resource-section.collapsed .pod-filter-bar { display: none; }
 .resource-section.collapsed { margin-bottom: 8px; }
 
 .section-count {
@@ -632,6 +635,53 @@ tbody td {
     font-family: "SF Mono", "Fira Code", Menlo, monospace;
     font-size: 0.78rem;
 }
+
+/* All Pods filter bar */
+.pod-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px 28px; /* 28px lines the box up with the section title */
+    padding: 5px 10px;
+    max-width: 380px;
+    background: #fff;
+    border: 1px solid #ccdce0;
+    border-radius: 8px;
+    transition: border-color 0.12s, box-shadow 0.12s;
+}
+.pod-filter-bar:focus-within,
+.pod-filter-bar.filtering {
+    border-color: #0984e3;
+    box-shadow: 0 0 0 3px rgba(9,132,227,0.12);
+}
+.pod-filter-icon {
+    color: #b2bec3;
+    font-size: 0.95rem;
+    line-height: 1;
+}
+.pod-filter-input {
+    flex: 1;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: #2d3436;
+    font-family: "SF Mono", "Fira Code", Menlo, monospace;
+    font-size: 0.8rem;
+}
+.pod-filter-input::placeholder { color: #b2bec3; font-family: inherit; }
+.pod-filter-clear {
+    border: none;
+    background: transparent;
+    color: #b2bec3;
+    cursor: pointer;
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: 0 2px;
+    /* Only useful once there is something to clear. */
+    visibility: hidden;
+}
+.pod-filter-bar.filtering .pod-filter-clear { visibility: visible; }
+.pod-filter-clear:hover { color: #d63031; }
 
 /* Empty state */
 .empty-state {
@@ -1038,6 +1088,22 @@ body.dark .kind-badge.persistentvolumeclaim { background: #16281f; color: #2ecc7
 body.dark .kind-badge.storageclass { background: #2d2a15; color: #f1c40f; }
 
 body.dark .empty-state { color: #636e72; }
+
+body.dark .pod-filter-bar {
+    background: #16213e;
+    border-color: #2d2d44;
+}
+body.dark .pod-filter-bar:focus-within,
+body.dark .pod-filter-bar.filtering {
+    border-color: #54a0ff;
+    box-shadow: 0 0 0 3px rgba(84,160,255,0.15);
+}
+body.dark .pod-filter-input { color: #e0e0e0; }
+body.dark .pod-filter-input::placeholder { color: #636e72; }
+body.dark .pod-filter-icon,
+body.dark .pod-filter-clear { color: #636e72; }
+body.dark .pod-filter-clear:hover { color: #ff7675; }
+
 body.dark .btn-clear-config { background: #2d2d44; color: #b2bec3; }
 
 body.dark .warning-item {
