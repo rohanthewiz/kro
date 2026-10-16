@@ -179,16 +179,62 @@ func (h *handlers) WatchExport(c rweb.Context) error {
 	if err != nil {
 		return writeJSONErr(c, watchErrStatus(err), err)
 	}
-	data, err := os.ReadFile(path)
+	return sendLogDownload(c, path, "read watch log file")
+}
+
+// LogsCaptureDownload serves a Logs-modal capture file (everything that view
+// has streamed, see podwatch.LiveCaptures) as a download. The capture may
+// still be growing; the download is a consistent snapshot of it as of the
+// request.
+// GET /api/logs/capture?id=..
+func (h *handlers) LogsCaptureDownload(c rweb.Context) error {
+	id := c.Request().QueryParam("id")
+	if !podwatch.ValidLiveCaptureID(id) {
+		return writeJSONErr(c, http.StatusBadRequest, serr.New("a valid capture id is required"))
+	}
+	// As with WatchExport, the ID only selects among paths the manager
+	// built itself; it never becomes part of a path.
+	path, err := h.mgr.Live().ExportPath(id)
 	if err != nil {
-		return writeJSONErr(c, http.StatusInternalServerError, serr.Wrap(err, "read watch log file"))
+		return writeJSONErr(c, watchErrStatus(err), err)
+	}
+	return sendLogDownload(c, path, "read live log capture")
+}
+
+// sendLogDownload streams a log file to the client as an attachment.
+//
+// rweb.SendFileAs opens and stats the file up front, then copies exactly that
+// many bytes to the connection after the handler returns (sendfile(2) on
+// plain TCP). Two properties matter for capture files:
+//   - memory stays flat no matter how large a long-running pod's log grew
+//     (the previous os.ReadFile approach held the whole file in RAM);
+//   - the size is fixed at stat time, so lines appended mid-download are not
+//     chased — the client gets a clean snapshot with a correct Content-Length.
+//
+// rweb treats .log as viewable text and sets no Content-Disposition, so it is
+// set here to force a save. no-store keeps WKWebView/browsers from answering
+// a repeat download of a grown file with a cached copy (or a 304 via the
+// Last-Modified header SendFileAs adds).
+func sendLogDownload(c rweb.Context, path, what string) error {
+	// Stat before setting the attachment headers so an error answer is a
+	// plain JSON response rather than an error body saved as the "log".
+	if _, err := os.Stat(path); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, os.ErrNotExist) {
+			status = http.StatusNotFound // pruned by retention/cleanup
+		}
+		return writeJSONErr(c, status, serr.Wrap(err, what))
 	}
 	res := c.Response()
-	res.SetHeader("Content-Type", "text/plain; charset=utf-8")
 	// The filename is built from sanitized segments, so it is quote-safe.
 	res.SetHeader("Content-Disposition", `attachment; filename="`+filepath.Base(path)+`"`)
-	_, err = res.Write(data)
-	return err
+	res.SetHeader("Cache-Control", "no-store")
+	// The file could still vanish between Stat and open (a cleanup racing
+	// the click); that rare case surfaces as a handler error.
+	if err := rweb.SendFileAs(c, path, filepath.Base(path)); err != nil {
+		return serr.Wrap(err, what)
+	}
+	return nil
 }
 
 // WatchLogInfo reports the watch-log directory, its usage, and the

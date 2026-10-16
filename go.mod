@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/rohanthewiz/element v0.5.6
 	github.com/rohanthewiz/logger v1.3.0
-	github.com/rohanthewiz/rweb v0.1.26
+	github.com/rohanthewiz/rweb v0.2.1-0.20261012041515-9781e96fa99a
 	github.com/rohanthewiz/serr v1.3.0
 	k8s.io/api v0.36.0
 	k8s.io/apimachinery v0.36.0

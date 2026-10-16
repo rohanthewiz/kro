@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"kro/kube"
+	"kro/podwatch"
 
 	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/rweb"
@@ -95,6 +96,12 @@ func produceSnapshots(client *kubernetes.Clientset, sel kube.Selection, out chan
 // disconnect. SSEHub.Handler installs an internal cleanup callback that
 // fires when the SSE pump actually exits, and SSEHubOptions.OnDisconnect
 // surfaces it to us — which is what we use to cancel the kube log stream.
+//
+// When the browser passes cap=<id>, every streamed line is also appended to a
+// capture file (podwatch.LiveCaptures), so a long-running view keeps its whole
+// history on disk and can be downloaded via /api/logs/capture. A "capture"
+// event announces the file path once the capture is open. Capture failure is
+// logged and otherwise ignored — the live view must not depend on disk.
 func (h *handlers) LogsSSE(svr *rweb.Server) rweb.Handler {
 	return func(c rweb.Context) error {
 		name := c.Request().QueryParam("name")
@@ -110,6 +117,16 @@ func (h *handlers) LogsSSE(svr *rweb.Server) rweb.Handler {
 			return writeTextErr(c, 502, err.Error())
 		}
 
+		var capture *podwatch.LiveCapture
+		if capID := c.Request().QueryParam("cap"); capID != "" {
+			var capErr error
+			capture, capErr = h.mgr.Live().Acquire(capID, sel.Context, sel.Namespace, name)
+			if capErr != nil {
+				logger.LogErr(serr.Wrap(capErr, "open live log capture"), "pod", name)
+				capture = nil
+			}
+		}
+
 		streamCtx, cancel := context.WithCancel(context.Background())
 
 		var hub *rweb.SSEHub
@@ -118,6 +135,12 @@ func (h *handlers) LogsSSE(svr *rweb.Server) rweb.Handler {
 			HeartbeatInterval: 30 * time.Second,
 			OnDisconnect: func() {
 				cancel()
+				// Release after cancel: the producer may still write a
+				// line or two while unwinding; WriteLine drops those
+				// once the last writer has released.
+				if capture != nil {
+					capture.Release()
+				}
 				if hub != nil {
 					hub.Close()
 				}
@@ -132,11 +155,14 @@ func (h *handlers) LogsSSE(svr *rweb.Server) rweb.Handler {
 		setupErr := hub.Handler(svr, "log")(c)
 		if setupErr != nil {
 			cancel()
+			if capture != nil {
+				capture.Release()
+			}
 			hub.Close()
 			return setupErr
 		}
 
-		go produceLogStream(streamCtx, client, sel.Namespace, name, hub)
+		go produceLogStream(streamCtx, client, sel.Namespace, name, hub, capture)
 		return nil
 	}
 }
@@ -307,13 +333,26 @@ func produceMetricsStream(ctx context.Context, client *kubernetes.Clientset, ns,
 	}
 }
 
-func produceLogStream(ctx context.Context, client *kubernetes.Clientset, ns, name string, hub *rweb.SSEHub) {
+// produceLogStream pumps one pod's follow stream into the hub and, when
+// capture is non-nil, into its capture file. The file gets exactly the text
+// the browser renders (container prefix included), so a download matches
+// what was on screen — minus nothing, since the file is never trimmed.
+func produceLogStream(ctx context.Context, client *kubernetes.Clientset, ns, name string, hub *rweb.SSEHub, capture *podwatch.LiveCapture) {
+	if capture != nil {
+		payload, _ := json.Marshal(map[string]string{"path": capture.Path})
+		hub.BroadcastRaw(rweb.SSEvent{Type: "capture", Data: string(payload)})
+	}
+
 	lines := make(chan kube.LogLine, 64)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		if err := kube.StreamPodLogs(ctx, client, ns, name, lines); err != nil {
-			hub.BroadcastRaw(rweb.SSEvent{Type: "log", Data: fmt.Sprintf("(error opening log stream: %v)", err)})
+			msg := fmt.Sprintf("(error opening log stream: %v)", err)
+			if capture != nil {
+				capture.WriteLine(msg)
+			}
+			hub.BroadcastRaw(rweb.SSEvent{Type: "log", Data: msg})
 		}
 	}()
 
@@ -327,6 +366,9 @@ func produceLogStream(ctx context.Context, client *kubernetes.Clientset, ns, nam
 			data := ln.Line
 			if ln.Container != "" {
 				data = "[" + ln.Container + "] " + data
+			}
+			if capture != nil {
+				capture.WriteLine(data)
 			}
 			hub.BroadcastRaw(rweb.SSEvent{Type: "log", Data: data})
 		}

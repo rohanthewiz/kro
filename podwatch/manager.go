@@ -81,6 +81,10 @@ type Manager struct {
 
 	notifyMu sync.RWMutex
 	notify   func(event string, payload any)
+
+	// live holds the file-backed captures of plain Logs-modal views. They
+	// share logDir so retention, cleanup, and usage cover them too.
+	live *LiveCaptures
 }
 
 // Session is one namespace watch: a baseline of pods that existed when it
@@ -168,9 +172,15 @@ func NewManager(clientFn func(string) (*kubernetes.Clientset, error), logDir str
 		clientFn:     clientFn,
 		sessions:     map[string]*Session{},
 		readyTimeout: defaultReadyTimeout,
+		live:         newLiveCaptures(logDir),
 	}
 	m.maxStreams.Store(defaultMaxStreams)
 	return m
+}
+
+// Live returns the Logs-modal capture registry (see livecapture.go).
+func (m *Manager) Live() *LiveCaptures {
+	return m.live
 }
 
 // SetMaxStreams sets the cap on the total streams kept in the list, clamped to

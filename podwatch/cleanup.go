@@ -129,7 +129,8 @@ func (m *Manager) Cleanup(maxAge time.Duration) (removed int, freed int64, err e
 }
 
 // trackedFiles snapshots the file path of every stream the manager knows
-// about, across all sessions.
+// about, across all sessions, plus every live (Logs-modal) capture that is
+// still being written.
 func (m *Manager) trackedFiles() map[string]bool {
 	m.mu.Lock()
 	streams := []*Stream{}
@@ -149,6 +150,11 @@ func (m *Manager) trackedFiles() map[string]bool {
 			}
 		}
 		st.mu.Unlock()
+	}
+	if m.live != nil {
+		for _, p := range m.live.activeFiles() {
+			keep[p] = true
+		}
 	}
 	return keep
 }

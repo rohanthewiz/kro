@@ -964,9 +964,26 @@
     var logSource = null;
     var logSourcePod = '';
 
+    // Server-side capture of the current Logs modal. Every line the view
+    // streams is also appended to a file on the kro host, so a long-running
+    // view never loses its early lines and the whole session can be
+    // downloaded (⤓). The ID is minted here, once per modal open, and baked
+    // into the SSE URL: EventSource auto-reconnects reuse that exact URL, and
+    // the manual reconnect pill reuses the ID too, so every reconnect appends
+    // to the same file rather than starting a new one. A new ID per open
+    // keeps separate viewing sessions in separate files.
+    var logCaptureId = '';
+
+    function newCaptureId() {
+        // crypto.randomUUID needs a secure context; a time+random ID is
+        // plenty here since the server only uses it as a map key.
+        return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+    }
+
     window.viewLogs = function(name) {
         closeLogStream();
-        openModal('Logs: ' + name, '', { wide: true, stream: true });
+        logCaptureId = newCaptureId();
+        openModal('Logs: ' + name, '', { wide: true, stream: true, download: true });
         startLogStream(name);
     };
 
@@ -978,10 +995,20 @@
         if (!content) return;
         setStreamStatus('reconnecting', 'Connecting…');
 
-        logSource = new EventSource('/sse/logs?name=' + encodeURIComponent(name));
+        setCaptureReady(null);
+        logSource = new EventSource('/sse/logs?name=' + encodeURIComponent(name) +
+            (logCaptureId ? '&cap=' + encodeURIComponent(logCaptureId) : ''));
         logSource.onopen = function() {
             setStreamStatus('connected', 'Connected');
         };
+        // Sent once per connection when the server has the capture file
+        // open; until then (or if the server couldn't open it) the
+        // download button stays disabled.
+        logSource.addEventListener('capture', function(e) {
+            var info = null;
+            try { info = JSON.parse(e.data); } catch (err) { /* ignore */ }
+            setCaptureReady(info && info.path ? info.path : null);
+        });
         logSource.addEventListener('log', function(e) {
             // Any log frame implies a healthy stream — flip the pill green
             // even if onopen hasn't fired yet (some browsers emit log first).
@@ -1002,6 +1029,31 @@
         if (dot) dot.className = 'log-status ' + state;
         if (lbl) lbl.textContent = label;
     }
+
+    // Enables the modal's download button once a capture file exists, and
+    // puts its on-disk path in the tooltip so it can also be found directly.
+    function setCaptureReady(path) {
+        var btn = document.getElementById('modal-download');
+        if (!btn) return;
+        btn.disabled = !path;
+        btn.title = path
+            ? 'Download everything this view has streamed (nothing is trimmed)\nSaved at: ' + path
+            : 'Download full log (waiting for capture…)';
+    }
+
+    // The server sends Content-Disposition: attachment, so a plain anchor
+    // click becomes a save — in browsers and in KRo.app's WKWebView, whose
+    // download delegate saves to ~/Downloads. The response is streamed from
+    // disk, so a capture of any size downloads without buffering.
+    window.downloadLogCapture = function() {
+        if (!logCaptureId) return;
+        var a = document.createElement('a');
+        a.href = '/api/logs/capture?id=' + encodeURIComponent(logCaptureId);
+        a.download = '';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    };
 
     window.reconnectLogStream = function() {
         if (!logSourcePod) return;
@@ -1789,6 +1841,7 @@
                 '</label>' +
                 '<button class="modal-font" id="modal-font-down" onclick="adjustModalFont(-1)" title="Decrease font size">A−</button>' +
                 '<button class="modal-font" id="modal-font-up" onclick="adjustModalFont(1)" title="Increase font size">A+</button>' +
+                '<button class="modal-copy modal-download" id="modal-download" onclick="downloadLogCapture()" title="Download full log" disabled>⤓</button>' +
                 '<button class="modal-copy" id="modal-copy" onclick="copyModalContent(this)" title="Copy to clipboard">⧉</button>' +
                 '<button class="modal-close" onclick="closeModal()">&times;</button>' +
                 '</div>' +
@@ -1832,6 +1885,12 @@
         var alphaEl = document.getElementById('modal-alpha');
         if (alphaEl) {
             alphaEl.style.display = (opts && opts.wide) ? '' : 'none';
+        }
+        // Only the Logs view has a server-side capture to download.
+        var downloadEl = document.getElementById('modal-download');
+        if (downloadEl) {
+            downloadEl.style.display = (opts && opts.download) ? '' : 'none';
+            downloadEl.disabled = true;
         }
         var searchToggleEl = document.getElementById('modal-search-toggle');
         if (searchToggleEl) {

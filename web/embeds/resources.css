@@ -920,6 +920,9 @@ body.dark .modal-resize.bl::after { border-color: #54a0ff; }
 }
 .modal-copy:hover,
 .modal-font:hover { color: #0984e3; border-color: #0984e3; }
+/* Disabled until the server confirms the capture file is open. */
+.modal-download:disabled,
+.modal-download:disabled:hover { opacity: 0.4; cursor: default; color: #636e72; border-color: #636e72; }
 
 .modal-close {
     background: none;
@@ -1140,6 +1143,8 @@ body.dark .modal-copy,
 body.dark .modal-font { color: #b2bec3; border-color: #636e72; }
 body.dark .modal-copy:hover,
 body.dark .modal-font:hover { color: #74b9ff; border-color: #74b9ff; }
+body.dark .modal-download:disabled,
+body.dark .modal-download:disabled:hover { color: #b2bec3; border-color: #636e72; }
 body.dark .modal-alpha { color: #b2bec3; border-color: #2d2d44; }
 body.dark .modal-alpha input[type="range"]::-webkit-slider-runnable-track,
 body.dark .modal-alpha input[type="range"]::-moz-range-track { background: #2d3a5a; }

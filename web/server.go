@@ -73,6 +73,7 @@ func NewServer(cfg config.Config, reg *kube.ClientRegistry, store *state.Store, 
 	svr.Get("/api/resources", h.Resources)
 	svr.Get("/api/describe", h.Describe)
 	svr.Get("/api/logs", h.Logs)
+	svr.Get("/api/logs/capture", h.LogsCaptureDownload)
 	svr.Delete("/api/resources", h.Delete)
 	svr.Post("/api/watch/start", h.WatchStart)
 	svr.Post("/api/watch/stop", h.WatchStop)
