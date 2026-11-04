@@ -337,6 +337,13 @@ func produceMetricsStream(ctx context.Context, client *kubernetes.Clientset, ns,
 // capture is non-nil, into its capture file. The file gets exactly the text
 // the browser renders (container prefix included), so a download matches
 // what was on screen — minus nothing, since the file is never trimmed.
+//
+// A capture that already holds stamped lines (a reconnect: EventSource's own
+// retry, or the status pill) resumes the follow right after them via
+// StreamOpts.ResumeAfter, instead of re-sending the 500-line tail into both
+// the file and the browser's view. Lines the capture drops as repeats are
+// still sent to the browser: the old connection was closed before this one
+// opened, so the browser may not have received them.
 func produceLogStream(ctx context.Context, client *kubernetes.Clientset, ns, name string, hub *rweb.SSEHub, capture *podwatch.LiveCapture) {
 	if capture != nil {
 		payload, _ := json.Marshal(map[string]string{"path": capture.Path})
@@ -347,7 +354,12 @@ func produceLogStream(ctx context.Context, client *kubernetes.Clientset, ns, nam
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if err := kube.StreamPodLogs(ctx, client, ns, name, lines); err != nil {
+		tail := kube.StreamTailLines
+		opts := kube.StreamOpts{TailLines: &tail}
+		if capture != nil {
+			opts.ResumeAfter = capture.ResumeAfter()
+		}
+		if err := kube.StreamPodLogsOpts(ctx, client, ns, name, opts, lines); err != nil {
 			msg := fmt.Sprintf("(error opening log stream: %v)", err)
 			if capture != nil {
 				capture.WriteLine(msg)
@@ -368,7 +380,7 @@ func produceLogStream(ctx context.Context, client *kubernetes.Clientset, ns, nam
 				data = "[" + ln.Container + "] " + data
 			}
 			if capture != nil {
-				capture.WriteLine(data)
+				capture.WriteStamped(ln.Container, ln.TS, data)
 			}
 			hub.BroadcastRaw(rweb.SSEvent{Type: "log", Data: data})
 		}

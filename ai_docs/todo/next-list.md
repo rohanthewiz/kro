@@ -33,7 +33,7 @@ history. Seeded 2026-11-03 by `/next-list seed` from the last 15 session docs
 - Nothing leaves Open, Validate or Roadmap without a line in another section.
 - Open, Validate and Roadmap each stay in ID order.
 
-**Next ID:** N-023
+**Next ID:** N-025
 
 ## Open
 
@@ -71,25 +71,8 @@ history. Seeded 2026-11-03 by `/next-list seed` from the last 15 session docs
 
 - **N-014** · raised `2026-1016-1505-live-log-capture-and-streamed-download` · value low
   Optional: seed the Logs-modal capture with the pod's full available history
-  when it opens. Today it starts from the 500-line tail (`streamTailLines`,
+  when it opens. Today it starts from the 500-line tail (`StreamTailLines`,
   `kube/logs_stream.go`).
-
-- **N-015** · raised `2026-1016-1505-live-log-capture-and-streamed-download` · value low
-  Optional: cap the Logs modal's DOM line count for very long sessions, now
-  that the capture file holds everything. Confirmed: the modal's
-  `flushLogLines` path has no trim (only the terminal has
-  `TERM_MAX_OUTPUT_LINES`). Not requested.
-
-- **N-016** · raised `2026-1016-1505-live-log-capture-and-streamed-download` · value medium
-  On a manual reconnect (pill click), the Logs modal re-sends the 500-line tail
-  into the same capture, behind a "lines below may repeat" marker
-  (`podwatch/livecapture.go`). Resume with `SinceTime` instead. Prior art: the
-  in-stream auto-reconnect in `kube/logs_stream.go` already uses `SinceTime`
-  plus timestamp-based de-dup (`skipThrough`), and Pod Watch resume
-  (`podwatch/manager.go`, `"resume"`) uses `LastLineAt`. The clock-skew care
-  noted originally applies if the resume point is the local receive time; it
-  does not apply if it is the API server's line timestamp, as `skipThrough`
-  uses.
 
 ## Validate
 
@@ -110,7 +93,9 @@ repair a test. No product change is planned unless the check finds a defect.
 - **N-017** · raised `2026-1016-1505-live-log-capture-and-streamed-download` · value medium
   Rebuild via `mac-install.sh`. In KRo.app, open Logs on a chatty pod and
   confirm: ⤓ enables, the download lands in ~/Downloads with all lines, and a
-  reconnect (pill click) appends to the same file with the marker.
+  reconnect (pill click) appends to the same file with the marker. (Since
+  N-016 the marker reads "resuming after the last captured line"; N-023
+  covers the no-repeat part.)
 
 - **N-018** · raised `2026-1016-1505-live-log-capture-and-streamed-download` · value medium
   Confirm Pod Watch export (`/api/watch/export`) still downloads correctly in
@@ -136,6 +121,21 @@ repair a test. No product change is planned unless the check finds a defect.
   `<pod>-<ts>.errors.log`. On a pod with no warnings, Warnings + ⤓ should show
   the "nothing to export" notice instead of a failed download.
 
+- **N-023** · raised `2026-1104-1325-logs-modal-resume-and-dom-cap-n015-n016` · value medium
+  Follow-up check for N-016: rebuild via `mac-install.sh`; in KRo.app open
+  Logs on a chatty pod, wait a bit, click the status pill to reconnect, and
+  confirm the view continues without re-showing the last 500 lines and the
+  downloaded capture has no repeated block after the "resuming after the last
+  captured line" marker. Try a multi-container pod too (per-container resume
+  points).
+
+- **N-024** · raised `2026-1104-1325-logs-modal-resume-and-dom-cap-n015-n016` · value low
+  Follow-up check for N-015: in KRo.app leave Logs open on a pod that logs
+  past 21,000 lines (or temporarily lower `LOG_MODAL_MAX_LINES` in
+  `resources.js`). Confirm the "N earlier lines trimmed" note appears at the
+  top, the view stays smooth, a reader scrolled up does not jump, search
+  counts stay right across a trim, and ⤓ still downloads every line.
+
 ## Roadmap
 
 Wanted but deferred. Not "next"; promote to Open when its time comes.
@@ -158,6 +158,30 @@ Wanted but deferred. Not "next"; promote to Open when its time comes.
 - **N-019** · declined `2026-0818-1749-favorite-cluster-namespace-combos` — Per-browser favorites. Favorites are global to the kro instance, matching how pinned namespaces work.
 
 ## Closed
+
+- **N-016** · raised `2026-1016-1505-live-log-capture-and-streamed-download` · closed 2026-11-04, `2026-1104-1325-logs-modal-resume-and-dom-cap-n015-n016`
+  A Logs-modal reconnect (pill click or EventSource's own retry) now resumes
+  right after the last captured line instead of re-sending the 500-line tail.
+  `kube.LogLine` carries the API server's line timestamp (`TS`);
+  `LiveCapture.WriteStamped` records it per container tag, `ResumeAfter()`
+  hands the marks back, and `kube.StreamOpts.ResumeAfter` starts each
+  container's follow at `SinceTime` + `skipThrough` (the same mechanism as
+  the in-stream auto-reconnect). Lines at or before a mark are also dropped
+  at write time, covering the old and new producers overlapping during a
+  reconnect. API timestamps throughout, so clock skew does not apply. A
+  capture with nothing stamped yet still falls back to the tail and the
+  "may repeat" marker. Tests: `TestLiveCaptureResumeAfterAndDedup`,
+  `TestLiveCaptureResumeWithoutStampsWarnsOfRepeats`,
+  `TestCopyTimestampedStreamStampsEachLine`. UI check is N-023.
+
+- **N-015** · raised `2026-1016-1505-live-log-capture-and-streamed-download` · closed 2026-11-04, `2026-1104-1325-logs-modal-resume-and-dom-cap-n015-n016`
+  The Logs modal caps its DOM at `LOG_MODAL_MAX_LINES` (20,000) via
+  `trimModalLog` in `resources.js`, trimming in batches of
+  `LOG_MODAL_TRIM_SLACK` (1,000) so the cost isn't paid every frame. A
+  `.log-trim-note` line at the top counts trimmed lines and points to ⤓.
+  Search counts and the current match are adjusted, a reader scrolled up
+  keeps their place, and trimming waits while text is selected. Checked with
+  a jsdom harness (not committed). UI check is N-024.
 
 - **N-006** · raised `2026-0720-1434-podwatch-errors-warnings-files-and-view-dropdown` · closed 2026-11-03, `2026-1103-1952-podwatch-export-follows-view-n006`
   Pod Watch export now follows the pod's console-frame view dropdown:

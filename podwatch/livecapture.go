@@ -33,6 +33,18 @@ import (
 //
 //	download ─► /api/logs/capture?id=ID ─► ExportPath (flush) ─► stream file
 //
+// Resuming without repeats: every line written through WriteStamped records
+// its API-server timestamp as the capture's per-container high-water mark
+// (lastTS). A reconnect asks ResumeAfter for those marks and passes them to
+// kube.StreamOpts.ResumeAfter, so the new follow starts right after the last
+// captured line instead of re-sending the pod's 500-line tail — which keeps
+// both the file and the browser's view free of duplicates. The same marks
+// also drop, at write time, any line at or before them: during a manual
+// reconnect the old connection's producer can still deliver a few lines
+// after the new one took its snapshot, and those arrive again on the new
+// follow. The timestamps are the API server's, never the local clock, so
+// skew between kro and the cluster does not matter.
+//
 // The ID comes from the browser rather than the server because EventSource
 // auto-reconnects with the exact URL it was created with; a client-chosen ID
 // baked into that URL lets a reconnect continue the same file instead of
@@ -75,6 +87,10 @@ type LiveCapture struct {
 	writers    int       // SSE connections currently writing; file is open iff > 0
 	releasedAt time.Time // when writers last dropped to 0; drives map expiry
 	lastFlush  time.Time
+	// lastTS is the API timestamp of the newest stamped line written, per
+	// container tag ("" for a single-container pod). It is the resume point
+	// for reconnects and the de-dup cutoff for overlapping writers.
+	lastTS map[string]time.Time
 }
 
 func newLiveCaptures(logDir string) *LiveCaptures {
@@ -124,9 +140,14 @@ func (lc *LiveCaptures) Acquire(id, ctxName, ns, pod string) (*LiveCapture, erro
 			return nil, err
 		}
 		c.file, c.w = f, w
-		if ok {
-			// Resuming: the new follow re-sends the pod's tail, so the
-			// lines right after this marker may repeat ones above it.
+		if ok && len(c.lastTS) > 0 {
+			// Resuming from recorded timestamps (see ResumeAfter): the new
+			// follow continues after the last captured line.
+			c.writeMarkerLocked("kro: log stream reconnected; resuming after the last captured line")
+		} else if ok {
+			// Nothing stamped was captured yet, so there is no resume
+			// point and the new follow re-sends the pod's tail: the lines
+			// right after this marker may repeat ones above it.
 			// Duplicates are preferred over a gap for an archive.
 			c.writeMarkerLocked("kro: log stream reconnected; lines below may repeat")
 		} else {
@@ -154,13 +175,50 @@ func (c *LiveCapture) Release() {
 	c.releasedAt = time.Now()
 }
 
-// WriteLine appends one line. Lines arriving after the last Release (a
+// ResumeAfter returns a copy of the per-container timestamps of the last
+// captured lines, for kube.StreamOpts.ResumeAfter. It is empty for a fresh
+// capture (or one that has only unstamped lines), in which case the caller's
+// follow starts from the usual tail.
+func (c *LiveCapture) ResumeAfter() map[string]time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.lastTS) == 0 {
+		return nil
+	}
+	out := make(map[string]time.Time, len(c.lastTS))
+	for k, v := range c.lastTS {
+		out[k] = v
+	}
+	return out
+}
+
+// WriteLine appends one line that carries no API timestamp (kro's own notes,
+// a previous instance's logs). Lines arriving after the last Release (a
 // producer goroutine finishing up after disconnect) are dropped.
 func (c *LiveCapture) WriteLine(line string) {
+	c.WriteStamped("", time.Time{}, line)
+}
+
+// WriteStamped appends one line streamed for container tag with API
+// timestamp ts, and reports whether it was written. A non-zero ts at or
+// before the container's last captured timestamp is a repeat — the overlap
+// of two writers during a reconnect — and is dropped; otherwise ts becomes
+// the container's new resume point. A zero ts is always written and never
+// moves the resume point. Lines after the last Release are dropped too.
+func (c *LiveCapture) WriteStamped(tag string, ts time.Time, line string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.w == nil {
-		return
+		return false
+	}
+	if !ts.IsZero() {
+		if prev, ok := c.lastTS[tag]; ok && !ts.After(prev) {
+			return false
+		}
+		if c.lastTS == nil {
+			c.lastTS = map[string]time.Time{}
+		}
+		c.lastTS[tag] = ts
 	}
 	c.w.WriteString(line)
 	c.w.WriteByte('\n')
@@ -168,6 +226,7 @@ func (c *LiveCapture) WriteLine(line string) {
 		c.w.Flush()
 		c.lastFlush = now
 	}
+	return true
 }
 
 // writeMarkerLocked records a lifecycle marker in the same format Pod Watch

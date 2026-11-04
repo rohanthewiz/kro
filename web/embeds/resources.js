@@ -1121,7 +1121,75 @@
                 refreshSearchCountLabel();
             }
         }
+        trimModalLog(content, body, atBottom);
         if (atBottom && body && !selectionActiveIn(content)) body.scrollTop = body.scrollHeight;
+    }
+
+    // DOM cap for the Logs modal. The server-side capture file keeps every
+    // line (⤓ downloads it), so the view only needs to hold the recent past;
+    // without a cap a chatty pod left open for hours grows the DOM without
+    // bound and every layout/search pass slows with it.
+    //
+    // Trimming is batched: nothing happens until the view is LOG_MODAL_TRIM_SLACK
+    // lines over the cap, then it drops back to exactly LOG_MODAL_MAX_LINES.
+    // That keeps the cost (span removal plus a scroll-height read) to once per
+    // ~1000 lines instead of once per animation frame.
+    //
+    //   children: [trim note] [oldest … newest]
+    //              ▲ one meta span, created on the first trim and updated after
+    var LOG_MODAL_MAX_LINES = 20000;
+    var LOG_MODAL_TRIM_SLACK = 1000;
+
+    function trimModalLog(content, body, atBottom) {
+        var note = content.firstElementChild;
+        if (note && !note.classList.contains('log-trim-note')) note = null;
+        var lines = content.children.length - (note ? 1 : 0);
+        if (lines <= LOG_MODAL_MAX_LINES + LOG_MODAL_TRIM_SLACK) return;
+        // A live selection would be destroyed (or silently re-anchored) by
+        // removing nodes it spans; defer until the user lets go. The next
+        // flush after that trims the whole backlog at once.
+        if (selectionActiveIn(content)) return;
+
+        var over = lines - LOG_MODAL_MAX_LINES;
+        var first = note ? 1 : 0;
+
+        // Search bookkeeping: matches inside removed lines leave the count.
+        // Groups are keyed by data-mi (one logical match may span several
+        // <mark>s); if the current match goes, navigation restarts at the top.
+        var removedIds = Object.create(null), removedGroups = 0, currentGone = false;
+        var heightBefore = (!atBottom && body) ? body.scrollHeight : 0;
+        for (var i = 0; i < over; i++) {
+            var span = content.children[first];
+            var marks = span.getElementsByTagName('mark');
+            for (var j = 0; j < marks.length; j++) {
+                var id = marks[j].getAttribute('data-mi');
+                if (id !== null && !removedIds[id]) { removedIds[id] = true; removedGroups++; }
+                if (marks[j].classList.contains('current')) currentGone = true;
+            }
+            content.removeChild(span);
+        }
+        if (removedGroups && searchState.query) {
+            searchState.matchCount = Math.max(0, searchState.matchCount - removedGroups);
+            searchState.currentIndex = currentGone ? 0 : Math.max(0, searchState.currentIndex - removedGroups);
+            refreshSearchCountLabel();
+        }
+
+        if (!note) {
+            note = document.createElement('span');
+            note.className = 'log-meta log-trim-note';
+            note.dataset.trimmed = '0';
+            content.insertBefore(note, content.firstChild);
+        }
+        var total = (parseInt(note.dataset.trimmed, 10) || 0) + over;
+        note.dataset.trimmed = String(total);
+        note.textContent = '— ' + total.toLocaleString() + ' earlier lines trimmed from this view; ⤓ downloads the full capture —\n';
+
+        // A reader scrolled up into the history would otherwise see the text
+        // jump by the height just removed; shift scrollTop to compensate.
+        // (Following the tail needs nothing: the caller re-pins to bottom.)
+        if (heightBefore && body) {
+            body.scrollTop = Math.max(0, body.scrollTop - (heightBefore - body.scrollHeight));
+        }
     }
 
     // Map any recognized level token onto the five filter buckets. Covers the
@@ -1731,6 +1799,9 @@
         var lines = content.children;
         for (var i = 0; i < lines.length; i++) {
             if (lineSpanHidden(lines[i], content)) continue;
+            // The trim note is rewritten via textContent, which would drop
+            // its marks without touching the count; keep it out of search.
+            if (lines[i].classList.contains('log-trim-note')) continue;
             total += highlightMatchesIn(lines[i], rx);
         }
         searchState.matchCount = total;

@@ -148,3 +148,81 @@ func TestCleanupKeepsActiveLiveCapture(t *testing.T) {
 		t.Errorf("released capture should be prunable, stat err = %v", err)
 	}
 }
+
+// A reconnect must resume from the per-container timestamp of the last
+// captured line, and lines at or before it (the overlap of an old and a new
+// writer) must not be written twice.
+func TestLiveCaptureResumeAfterAndDedup(t *testing.T) {
+	lc := newLiveCaptures(t.TempDir())
+	c, err := lc.Acquire("cap-dedup001", "ctx", "ns", "pod-a")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if r := c.ResumeAfter(); r != nil {
+		t.Fatalf("fresh capture ResumeAfter = %v, want nil", r)
+	}
+	t0 := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
+	c.WriteStamped("app", t0, "[app] one")
+	c.WriteStamped("app", t0.Add(time.Second), "[app] two")
+	c.WriteStamped("side", t0.Add(500*time.Millisecond), "[side] s1")
+	c.WriteLine("unstamped note") // must not move any resume point
+	c.Release()
+
+	c2, err := lc.Acquire("cap-dedup001", "ctx", "ns", "pod-a")
+	if err != nil {
+		t.Fatalf("re-Acquire: %v", err)
+	}
+	r := c2.ResumeAfter()
+	if !r["app"].Equal(t0.Add(time.Second)) || !r["side"].Equal(t0.Add(500*time.Millisecond)) || len(r) != 2 {
+		t.Fatalf("ResumeAfter = %v", r)
+	}
+	// The returned map is a copy.
+	r["app"] = time.Time{}
+	if c2.ResumeAfter()["app"].IsZero() {
+		t.Fatalf("ResumeAfter leaked its internal map")
+	}
+
+	if c2.WriteStamped("app", t0.Add(time.Second), "[app] two") {
+		t.Errorf("a line at the resume point was written again")
+	}
+	if c2.WriteStamped("app", t0, "[app] one") {
+		t.Errorf("a line before the resume point was written again")
+	}
+	if !c2.WriteStamped("app", t0.Add(2*time.Second), "[app] three") {
+		t.Errorf("a newer line was dropped")
+	}
+	// Per-container: side's mark is earlier than app's, so a side line between
+	// the two marks is new.
+	if !c2.WriteStamped("side", t0.Add(900*time.Millisecond), "[side] s2") {
+		t.Errorf("per-container mark not honoured")
+	}
+	c2.Release()
+
+	got := readCapture(t, lc, "cap-dedup001")
+	if strings.Count(got, "[app] two") != 1 || strings.Count(got, "[app] one") != 1 {
+		t.Errorf("repeated lines in capture:\n%s", got)
+	}
+	if !strings.Contains(got, "resuming after the last captured line") {
+		t.Errorf("missing resume marker:\n%s", got)
+	}
+	if strings.Contains(got, "may repeat") {
+		t.Errorf("stamped resume should not use the may-repeat marker:\n%s", got)
+	}
+}
+
+// A capture with only unstamped lines has no resume point, so a reconnect
+// falls back to the tail and says so.
+func TestLiveCaptureResumeWithoutStampsWarnsOfRepeats(t *testing.T) {
+	lc := newLiveCaptures(t.TempDir())
+	c, _ := lc.Acquire("cap-nostamp1", "ctx", "ns", "pod-a")
+	c.WriteLine("plain")
+	c.Release()
+	c2, _ := lc.Acquire("cap-nostamp1", "ctx", "ns", "pod-a")
+	if r := c2.ResumeAfter(); r != nil {
+		t.Errorf("ResumeAfter = %v, want nil", r)
+	}
+	c2.Release()
+	if got := readCapture(t, lc, "cap-nostamp1"); !strings.Contains(got, "lines below may repeat") {
+		t.Errorf("missing may-repeat marker:\n%s", got)
+	}
+}

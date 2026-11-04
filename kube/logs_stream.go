@@ -16,7 +16,10 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-const streamTailLines int64 = 500
+// StreamTailLines is the backlog StreamPodLogs starts a follow with. It is
+// exported so callers building their own StreamOpts (the Logs modal, which
+// adds a resume point) start from the same tail.
+const StreamTailLines int64 = 500
 
 // streamRetryInterval is how often StreamPodLogsOpts retries the pod Get and
 // per-container Stream calls while ReadyTimeout has not elapsed. New pods race
@@ -36,6 +39,11 @@ const lastCrashSlack = 30 * time.Second
 type LogLine struct {
 	Container string
 	Line      string
+	// TS is the API server's timestamp for the line (from Timestamps=true),
+	// zero for lines that carry none: kro's own markers and the previous
+	// (crashed) instance's logs. Callers that persist lines record it as a
+	// resume point; see StreamOpts.ResumeAfter.
+	TS time.Time
 }
 
 // StreamOpts tunes StreamPodLogsOpts.
@@ -50,6 +58,15 @@ type StreamOpts struct {
 	// container's Stream call until the deadline, so logs of a pod that is
 	// still Pending/starting are picked up once available.
 	ReadyTimeout time.Duration
+	// ResumeAfter maps a container's LogLine.Container tag ("" for a
+	// single-container pod) to the timestamp of the last line the caller
+	// already has. That container's follow starts at SinceTime=ts (rounded
+	// down to the API's 1s granularity) and drops every line stamped at or
+	// before ts, so a reconnect continues exactly where the caller left off
+	// instead of re-sending the tail. It overrides TailLines/SinceTime for
+	// the containers it names; others use them as usual. The timestamps are
+	// the API's own line timestamps, so no local-clock skew is involved.
+	ResumeAfter map[string]time.Time
 }
 
 // StreamPodLogs follows logs for every container in the named pod and
@@ -60,7 +77,7 @@ type StreamOpts struct {
 // reconnected transparently, resuming just after the last delivered line.
 // Callers cancel ctx to stop streaming early.
 func StreamPodLogs(ctx context.Context, client *kubernetes.Clientset, ns, name string, out chan<- LogLine) error {
-	tail := streamTailLines
+	tail := StreamTailLines
 	return StreamPodLogsOpts(ctx, client, ns, name, StreamOpts{TailLines: &tail}, out)
 }
 
@@ -136,6 +153,13 @@ func streamContainerLogs(ctx context.Context, client *kubernetes.Clientset, ns, 
 	connected := false
 	var lastTS time.Time // timestamp of the last delivered line; reconnects resume just after it
 	tail, since := opts.TailLines, opts.SinceTime
+	if ts, ok := opts.ResumeAfter[tag]; ok && !ts.IsZero() {
+		// Caller-supplied resume point: identical to the in-stream
+		// reconnect below, just seeded before the first follow.
+		lastTS = ts
+		t := metaV1.NewTime(ts.Truncate(time.Second))
+		since, tail = &t, nil
+	}
 
 	for {
 		req := client.CoreV1().Pods(ns).GetLogs(name, &coreV1.PodLogOptions{
@@ -240,13 +264,14 @@ func copyTimestampedStream(ctx context.Context, stream io.ReadCloser, tag string
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimRight(scanner.Text(), "\r")
+		var lineTS time.Time // stays zero for a line without a parseable timestamp
 		if ts, rest, ok := splitLogTimestamp(line); ok {
 			if !ts.After(skipThrough) {
 				continue
 			}
-			last, line = ts, rest
+			last, lineTS, line = ts, ts, rest
 		}
-		if !sendLine(ctx, out, LogLine{Container: tag, Line: line}) {
+		if !sendLine(ctx, out, LogLine{Container: tag, Line: line, TS: lineTS}) {
 			return last
 		}
 	}

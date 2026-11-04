@@ -220,6 +220,9 @@ func TestCopyTimestampedStreamSkipsReplayedLines(t *testing.T) {
 		if ln.Container != "c1" {
 			t.Fatalf("container tag = %q, want c1", ln.Container)
 		}
+		if ln.TS.IsZero() {
+			t.Fatalf("line %q delivered without its timestamp", ln.Line)
+		}
 		got = append(got, ln.Line)
 	}
 	if want := []string{"new-a", "new-b"}; !slices.Equal(got, want) {
@@ -227,5 +230,32 @@ func TestCopyTimestampedStreamSkipsReplayedLines(t *testing.T) {
 	}
 	if want := time.Date(2026, 7, 10, 12, 0, 6, 0, time.UTC); !last.Equal(want) {
 		t.Fatalf("last = %v, want %v", last, want)
+	}
+}
+
+// Each delivered line carries its own timestamp; a line without one comes
+// through with a zero TS rather than inheriting the previous line's.
+func TestCopyTimestampedStreamStampsEachLine(t *testing.T) {
+	input := "2026-07-10T12:00:05.100000000Z first\n" +
+		"no timestamp here\n" +
+		"2026-07-10T12:00:06.000000000Z second\n"
+	out := make(chan LogLine, 8)
+	copyTimestampedStream(t.Context(), io.NopCloser(strings.NewReader(input)), "", time.Time{}, out)
+	close(out)
+	var got []LogLine
+	for ln := range out {
+		got = append(got, ln)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d lines, want 3", len(got))
+	}
+	if want := time.Date(2026, 7, 10, 12, 0, 5, 100000000, time.UTC); !got[0].TS.Equal(want) {
+		t.Errorf("first TS = %v, want %v", got[0].TS, want)
+	}
+	if !got[1].TS.IsZero() || got[1].Line != "no timestamp here" {
+		t.Errorf("unstamped line = %+v, want zero TS", got[1])
+	}
+	if want := time.Date(2026, 7, 10, 12, 0, 6, 0, time.UTC); !got[2].TS.Equal(want) {
+		t.Errorf("second TS = %v, want %v", got[2].TS, want)
 	}
 }
