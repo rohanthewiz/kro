@@ -266,6 +266,12 @@
     border-radius: 2px;
     padding: 0 1px;
 }
+/* "Browse all namespaces in <ctx>" — the one row that calls a cluster.
+   Muted so it reads as an action below the results, not a destination. */
+.fav-palette-browse { color: #636e72; font-size: 0.84rem; }
+.fav-palette-browse .fav-palette-star { color: #0984e3; }
+.fav-palette-browse-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fav-palette-browse.error { color: #d63031; }
 .fav-palette-empty {
     padding: 16px;
     text-align: center;
@@ -341,6 +347,9 @@ body.dark .fav-palette-row.active { background: rgba(84,160,255,0.18); }
 body.dark .fav-palette-ctx { color: #54a0ff; }
 body.dark .fav-palette-ns { color: #e0e0e0; }
 body.dark .fav-palette-star { color: #fdcb6e; }
+body.dark .fav-palette-browse { color: #b2bec3; }
+body.dark .fav-palette-browse .fav-palette-star { color: #54a0ff; }
+body.dark .fav-palette-browse.error { color: #ff7675; }
 body.dark .fav-palette-tag { background: rgba(224,224,224,0.1); color: #b2bec3; }
 body.dark .fav-palette-row mark { background: rgba(253,203,110,0.3); color: #fdcb6e; }
 body.dark .fav-palette-hint { background: #1f2429; border-top-color: #2f3640; color: #636e72; }

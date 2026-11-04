@@ -2,7 +2,9 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -262,5 +264,45 @@ func (h *handlers) Targets(c rweb.Context) error {
 		"targets":   out,
 		"context":   sel.Context,
 		"namespace": sel.Namespace,
+	})
+}
+
+// ClusterNamespaces answers the quick switcher's "Browse all namespaces" row:
+// GET /api/targets/namespaces?context=<ctx> lists every namespace the cluster
+// reports for that context. It is the one palette path that talks to a
+// cluster, so it is separate from Targets (which stays local and instant) and
+// only runs when the user asks for it. Nothing is pinned here; choosing one of
+// the returned rows goes through GoToTarget, which pins as usual.
+//
+// Status codes: 400 unknown context, 502 no client for it, 403 when the
+// credentials may not list namespaces (kube.ErrNamespaceListForbidden), 502
+// for any other cluster error. All carry {"error": "..."} for the row text.
+func (h *handlers) ClusterNamespaces(c rweb.Context) error {
+	ctxName := strings.TrimSpace(c.Request().QueryParam("context"))
+	if ctxName == "" {
+		sel, err := h.resolve(c)
+		if err != nil {
+			return writeJSONErr(c, http.StatusServiceUnavailable, err)
+		}
+		ctxName = sel.Context
+	}
+	if !h.reg.HasContext(ctxName) {
+		return writeJSONErr(c, http.StatusBadRequest, serr.New("unknown context: "+ctxName))
+	}
+	client, err := h.reg.Client(ctxName)
+	if err != nil {
+		return writeJSONErr(c, http.StatusBadGateway, err)
+	}
+	names, err := kube.ListNamespaceNames(context.Background(), client)
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, kube.ErrNamespaceListForbidden) {
+			status = http.StatusForbidden
+		}
+		return writeJSONErr(c, status, err)
+	}
+	return c.WriteJSON(map[string]any{
+		"context":    ctxName,
+		"namespaces": names,
 	})
 }

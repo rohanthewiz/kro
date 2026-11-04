@@ -694,6 +694,25 @@
     // re-renders don't lose user intent. Key: kro_collapsed_<slug>.
     var COLLAPSE_KEY_PREFIX = 'kro_collapsed_';
 
+    // Sections whose builder is kept in SECTION_BUILDERS but which no tab
+    // mounts any more. Their collapse flags would otherwise sit in
+    // localStorage forever, so they are dropped once per page load — but only
+    // while no TAB_CONFIG entry mounts the slug, so re-mounting one (as the
+    // 'pods-orphan' builder comment invites) keeps the user's flag from then
+    // on. This is an explicit list rather than "any kro_collapsed_* key not in
+    // TAB_CONFIG": sections outside the tabs ('terminal', rendered by
+    // pages.go) share the prefix and must keep their state.
+    var RETIRED_SECTION_SLUGS = ['pods-orphan'];
+
+    (function pruneRetiredCollapseKeys() {
+        try {
+            RETIRED_SECTION_SLUGS.forEach(function(slug) {
+                var mounted = TAB_CONFIG.some(function(t) { return t.sections.indexOf(slug) !== -1; });
+                if (!mounted) localStorage.removeItem(COLLAPSE_KEY_PREFIX + slug);
+            });
+        } catch (_) { /* storage unavailable: nothing to prune */ }
+    })();
+
     function isCollapsed(slug) {
         return localStorage.getItem(COLLAPSE_KEY_PREFIX + slug) === '1';
     }

@@ -5,7 +5,8 @@
                           focused chip: ←/→ move focus, Alt+←/→ reorder,
                           Enter/Space switch, F2 rename
      Ctrl+1 … Ctrl+9      jump to the Nth chip from anywhere
-     Cmd/Ctrl+K           quick switcher over every known destination
+     Cmd/Ctrl+K           quick switcher over every known destination, plus an
+                          on-demand "Browse all namespaces" of one cluster
 
    All three drive window.kroSwitchTarget() (defined in resources.js), which
    posts one request to /api/favorites/go and repaints the header from the
@@ -26,6 +27,19 @@
     var paletteRows = [];                            // currently filtered+rendered rows
     var paletteIdx = 0;
     var isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+
+    // Namespace lists fetched from a cluster by the palette's "Browse all
+    // namespaces" row, keyed by context name. /api/targets deliberately makes
+    // no cluster calls (so the palette opens instantly), which means it only
+    // knows pinned namespaces; this is the opt-in way to see the rest.
+    //   { names: [...], at: ms }   loaded
+    //   { loading: true }          request in flight
+    //   { error: '...', at: ms }   last attempt failed (choosing the row retries)
+    // A loaded list is reused for CLUSTER_NS_TTL_MS, then the row offers to
+    // fetch again; namespaces change rarely, and typing cluster/namespace
+    // still reaches one created in between.
+    var clusterNs = {};
+    var CLUSTER_NS_TTL_MS = 5 * 60 * 1000;
 
     var MAX_HOTKEYS = 9;      // Ctrl+1..Ctrl+9
     var MAX_PALETTE_ROWS = 60; // cap the DOM built per keystroke
@@ -438,7 +452,7 @@
         var nsQ = slash >= 0 ? q.slice(slash + 1).trim() : '';
 
         var rows = [];
-        targets.forEach(function(t) {
+        paletteTargets().forEach(function(t) {
             var combined = (t.context + '/' + t.namespace + ' ' + (t.label || '')).toLowerCase();
             var score = t.rank * 1000;
             var ok = true;
@@ -498,15 +512,122 @@
         return out;
     }
 
+    // paletteTargets is the row source for filterTargets: the local targets
+    // from /api/targets, plus any fresh cluster-listed namespaces (see
+    // clusterNs) not already among them. Listed rows rank 3, below pinned
+    // ones, and carry listed:true so they are tagged "not pinned". Choosing
+    // one goes through goTo → /api/favorites/go, which pins it like any jump.
+    function paletteTargets() {
+        var now = Date.now();
+        var out = targets.slice();
+        var seen = Object.create(null);
+        targets.forEach(function(t) { seen[t.context + '\n' + t.namespace] = true; });
+        Object.keys(clusterNs).forEach(function(cx) {
+            var e = clusterNs[cx];
+            if (!e.names || now - e.at > CLUSTER_NS_TTL_MS) return;
+            e.names.forEach(function(ns) {
+                if (seen[cx + '\n' + ns]) return;
+                seen[cx + '\n' + ns] = true;
+                out.push({ context: cx, namespace: ns, rank: 3, listed: true });
+            });
+        });
+        return out;
+    }
+
+    // browseRowFor picks the context the "Browse all namespaces" row would
+    // list, or returns null when that list is already loaded and fresh. The
+    // context comes from the query's cluster half when it names exactly one
+    // known context (an exact name wins over several prefix matches);
+    // otherwise it is the current context.
+    function browseRowFor(query) {
+        var q = (query || '').trim().toLowerCase();
+        var slash = q.indexOf('/');
+        var cx = current.context;
+        if (slash > 0) {
+            var ctxQ = q.slice(0, slash).trim();
+            var hits = [];
+            targets.forEach(function(t) {
+                if (hits.indexOf(t.context) < 0 && matchAt(t.context, ctxQ) >= 0) hits.push(t.context);
+            });
+            var exact = hits.filter(function(h) { return h.toLowerCase() === ctxQ; });
+            if (exact.length === 1) cx = exact[0];
+            else if (hits.length === 1) cx = hits[0];
+        }
+        if (!cx) return null;
+        var e = clusterNs[cx];
+        if (e && e.names && Date.now() - e.at <= CLUSTER_NS_TTL_MS) return null;
+        return { browse: true, context: cx, state: e || null };
+    }
+
+    function browseRowHTML(t, i) {
+        var st = t.state, text, tag = 'cluster call';
+        if (st && st.loading) {
+            text = 'Listing namespaces in <b>' + esc(t.context) + '</b>…';
+            tag = '';
+        } else if (st && st.error) {
+            text = 'Couldn\'t list namespaces in <b>' + esc(t.context) + '</b>: ' + esc(st.error);
+            tag = 'retry';
+        } else {
+            text = 'Browse all namespaces in <b>' + esc(t.context) + '</b>';
+        }
+        return '<div class="fav-palette-row fav-palette-browse' + (st && st.error ? ' error' : '') +
+            (i === paletteIdx ? ' active' : '') + '" role="option" data-idx="' + i + '">' +
+            '<span class="fav-palette-star">⋯</span>' +
+            '<span class="fav-palette-browse-text">' + text + '</span>' +
+            (tag ? '<span class="fav-palette-tag">' + tag + '</span>' : '') +
+            '</div>';
+    }
+
+    // browseNamespaces fetches one context's full namespace list for the
+    // palette and repaints it in place (the palette stays open, so the user
+    // can keep typing to narrow the now-larger list).
+    function browseNamespaces(cx) {
+        var e = clusterNs[cx];
+        if (e && e.loading) return;
+        clusterNs[cx] = { loading: true };
+        repaintPalette();
+        fetch('/api/targets/namespaces?context=' + encodeURIComponent(cx))
+            .then(function(r) {
+                return r.json().then(function(d) { return { ok: r.ok, status: r.status, d: d || {} }; },
+                    function() { return { ok: false, status: r.status, d: {} }; });
+            })
+            .then(function(res) {
+                if (!res.ok || res.d.error) {
+                    clusterNs[cx] = { error: res.d.error || ('HTTP ' + res.status), at: Date.now() };
+                } else {
+                    clusterNs[cx] = { names: res.d.namespaces || [], at: Date.now() };
+                }
+            })
+            .catch(function(err) {
+                clusterNs[cx] = { error: err.message || 'request failed', at: Date.now() };
+            })
+            .then(repaintPalette);
+    }
+
+    // Re-render the open palette from its current query, keeping keyboard
+    // focus in the input (a mouse click on a row would otherwise leave focus
+    // on <body>, and ↑↓/Enter would stop working).
+    function repaintPalette() {
+        if (!paletteOpen()) return;
+        var input = document.getElementById('fav-palette-input');
+        renderPalette(input ? input.value : '');
+        if (input && document.activeElement !== input) input.focus();
+    }
+
     function renderPalette(query) {
         var list = document.getElementById('fav-palette-list');
         if (!list) return;
-        paletteRows = filterTargets(query);
+        var matches = filterTargets(query);
+        var browse = browseRowFor(query);
+        // The browse row is always last and is not ranked with the matches;
+        // it is still a normal row for ↑↓ / Enter / click (see choosePalette).
+        paletteRows = browse ? matches.concat([browse]) : matches;
         if (paletteIdx >= paletteRows.length) paletteIdx = 0;
 
-        if (!paletteRows.length) {
+        if (!matches.length) {
             list.innerHTML = '<div class="fav-palette-empty">No cluster / namespace matches' +
-                ' — type <b>cluster/namespace</b> to jump to one that isn\'t pinned yet</div>';
+                ' — type <b>cluster/namespace</b> to jump to one that isn\'t pinned yet</div>' +
+                (browse ? browseRowHTML(browse, 0) : '');
             return;
         }
 
@@ -516,7 +637,8 @@
         var nsNeedle = slash >= 0 ? q.slice(slash + 1).trim() : ctxNeedle;
 
         list.innerHTML = paletteRows.map(function(t, i) {
-            var tag = t.adhoc ? 'not pinned' : (t.favorite ? '' : (t.rank === 2 ? 'default' : ''));
+            if (t.browse) return browseRowHTML(t, i);
+            var tag = (t.adhoc || t.listed) ? 'not pinned' : (t.favorite ? '' : (t.rank === 2 ? 'default' : ''));
             return '<div class="fav-palette-row' + (i === paletteIdx ? ' active' : '') + '"' +
                 ' role="option" data-idx="' + i + '">' +
                 '<span class="fav-palette-star">' + (t.favorite ? '★' : '') + '</span>' +
@@ -542,6 +664,7 @@
     function choosePalette(idx) {
         var t = paletteRows[idx];
         if (!t) return;
+        if (t.browse) { browseNamespaces(t.context); return; } // stays open
         closePalette();
         goTo(t.context, t.namespace);
     }

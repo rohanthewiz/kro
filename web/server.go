@@ -70,6 +70,7 @@ func NewServer(cfg config.Config, reg *kube.ClientRegistry, store *state.Store, 
 	svr.Post("/api/favorites/reorder", h.ReorderFavorites)
 	svr.Post("/api/favorites/go", h.GoToTarget)
 	svr.Get("/api/targets", h.Targets)
+	svr.Get("/api/targets/namespaces", h.ClusterNamespaces) // palette "Browse all namespaces"; the only palette call that hits a cluster
 	svr.Get("/api/resources", h.Resources)
 	svr.Get("/api/describe", h.Describe)
 	svr.Get("/api/logs", h.Logs)

@@ -33,7 +33,7 @@ history. Seeded 2026-11-03 by `/next-list seed` from the last 15 session docs
 - Nothing leaves Open, Validate or Roadmap without a line in another section.
 - Open, Validate and Roadmap each stay in ID order.
 
-**Next ID:** N-027
+**Next ID:** N-028
 
 ## Open
 
@@ -43,19 +43,6 @@ history. Seeded 2026-11-03 by `/next-list seed` from the last 15 session docs
   approximate entries. The user may want it as approx entries too (offered,
   not requested).
 
-- **N-009** · raised `2026-0818-1749-favorite-cluster-namespace-combos` · value low
-  The quick-switcher palette lists only pinned/known namespaces; it never asks
-  a cluster for its full namespace list (no `Namespaces().List` call anywhere).
-  Ad-hoc `ctx/ns` typing covers the gap. *Re-raise:* first written down in
-  `2026-0428-2031-kro-build` as a "Browse all namespaces" one-off picker for
-  clusters where the user has list permission.
-
-- **N-010** · raised `2026-0826-1817-all-pods-filter-and-orphan-reconcile` · value low
-  The `kro_collapsed_pods-orphan` localStorage key is inert now that no tab
-  mounts `pods-orphan` (the section builder remains in `resources.js` for
-  re-mounting). A cleanup pass could drop the key. Harmless; candidate for
-  Non-goals.
-
 - **N-013** · raised `2026-1016-1505-live-log-capture-and-streamed-download` · value medium
   Tag an rweb release containing the streaming API (rweb's own list item
   N-027, not this file's) and move kro off the master pseudo-version
@@ -64,7 +51,13 @@ history. Seeded 2026-11-03 by `/next-list seed` from the last 15 session docs
 - **N-014** · raised `2026-1016-1505-live-log-capture-and-streamed-download` · value low
   Optional: seed the Logs-modal capture with the pod's full available history
   when it opens. Today it starts from the 500-line tail (`StreamTailLines`,
-  `kube/logs_stream.go`).
+  `kube/logs_stream.go`). *Update 2026-11-04:* left for a decision. The file
+  has to hold history before the tail, so the simple design (a non-follow
+  `GetLogs` into the file first, then the follow with `ResumeAfter` = its
+  last timestamp) delays the view's first line until the whole history is
+  downloaded. A chatty long-lived pod can also have GBs of history, so it
+  needs a size cap or an opt-in (a "fetch full history" action in the
+  modal).
 
 ## Validate
 
@@ -140,6 +133,14 @@ repair a test. No product change is planned unless the check finds a defect.
   any old query), does nothing on the Pod Watch page or with the section
   collapsed, and still types a `/` in the terminal and the quick switcher.
 
+- **N-027** · raised `2026-1104-1332-palette-browse-namespaces-n009-n010` · value low
+  Follow-up check for N-009: in KRo.app open the quick switcher (⌘K) and
+  confirm the last row reads "Browse all namespaces in <current cluster>",
+  that typing `othercluster/` retargets it, that choosing it lists the
+  cluster's namespaces as "not pinned" rows (switching to one pins it), and
+  that a cluster where you can't list namespaces shows the "not permitted"
+  row instead.
+
 ## Roadmap
 
 Wanted but deferred. Not "next"; promote to Open when its time comes.
@@ -162,6 +163,24 @@ Wanted but deferred. Not "next"; promote to Open when its time comes.
 - **N-019** · declined `2026-0818-1749-favorite-cluster-namespace-combos` — Per-browser favorites. Favorites are global to the kro instance, matching how pinned namespaces work.
 
 ## Closed
+
+- **N-010** · raised `2026-0826-1817-all-pods-filter-and-orphan-reconcile` · closed 2026-11-04, `2026-1104-1332-palette-browse-namespaces-n009-n010`
+  `resources.js` now drops `kro_collapsed_<slug>` once per page load for each
+  slug in `RETIRED_SECTION_SLUGS` (`['pods-orphan']`) that no `TAB_CONFIG`
+  tab mounts, so re-mounting the section keeps its flag again. It is an
+  explicit list rather than "anything not in TAB_CONFIG", because
+  `terminal` (rendered by `pages.go`) shares the prefix.
+
+- **N-009** · raised `2026-0818-1749-favorite-cluster-namespace-combos` · closed 2026-11-04, `2026-1104-1332-palette-browse-namespaces-n009-n010`
+  The quick switcher's last row is now "Browse all namespaces in <ctx>",
+  where ctx is the context the query's `ctx/` part names, or else the
+  current one. Choosing it calls the new `GET /api/targets/namespaces?context=`
+  (`ClusterNamespaces` → `kube.ListNamespaceNames`, 8s timeout, 403 via
+  `ErrNamespaceListForbidden`) and merges the names in as rank-3 "not pinned"
+  rows, cached per context for 5 minutes. `/api/targets` and the palette
+  open still make no cluster calls. Tests: `TestListNamespaceNamesSorted`,
+  `TestListNamespaceNamesForbidden`. The palette flow was checked with a
+  jsdom harness (not committed). UI check is N-027.
 
 - **N-011** · raised `2026-0826-1817-all-pods-filter-and-orphan-reconcile` · closed 2026-11-04, `2026-1104-1328-keyboard-fav-reorder-and-pod-filter-slash-n008-n011`
   A bare `/` outside any text field, with no modal open, focuses (and
