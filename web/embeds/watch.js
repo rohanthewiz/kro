@@ -71,6 +71,11 @@
     var lastStatus = null;    // last /api/watch/status payload
     var frames = {};          // frameKey -> {key, ctx, ns, pod, el, body, status, es, buf, scheduled}
     var noticeTimer = null;
+    // Error text from the last failed /api/namespaces load, '' when the last
+    // load succeeded. The notice line clears itself after a few seconds, so
+    // this keeps the cause around for watchStart to repeat when the user
+    // clicks Start on the resulting empty picker.
+    var nsLoadError = '';
     var maxPostTimer = null;  // debounce for max-streams stepper posts
 
     // Max-streams stepper: arrows step the shown value immediately; the
@@ -155,12 +160,22 @@
     // Populate the watch namespace picker from the pinned namespaces of the
     // current context. Keeps the current pick if it still exists, else falls
     // back to the global namespace, else the first entry.
+    //
+    // Failure handling: the handler answers a bad selection (e.g. a
+    // kubeconfig that no longer resolves) with a non-2xx and {"error": ...};
+    // jsonOrThrow turns that, a network failure, or a non-JSON body into a
+    // rejection. Before, any of these left a silently empty picker and Start
+    // said only "Pick a namespace". Now the picker shows a disabled
+    // "failed to load" entry carrying the cause in its tooltip, the notice
+    // line shows it once, and nsLoadError lets Start repeat it.
     function loadWatchNamespaces() {
         var sel = document.getElementById('watch-ns-select');
         if (!sel) return Promise.resolve();
         return fetch('/api/namespaces')
-            .then(function(r) { return r.json(); })
+            .then(jsonOrThrow)
             .then(function(data) {
+                nsLoadError = '';
+                sel.title = 'Namespace to watch (independent of the current selection)';
                 var list = data.namespaces || [];
                 var prev = sel.value;
                 sel.innerHTML = '';
@@ -185,7 +200,22 @@
                 }
                 renderStatus();
             })
-            .catch(function() {});
+            .catch(function(err) {
+                nsLoadError = (err && err.message) || String(err);
+                // Clear rather than keep the old options: a failure usually
+                // follows a context change, so the previous entries belong to
+                // the wrong cluster and Start would act on a stale pick.
+                sel.innerHTML = '';
+                var opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = '— failed to load namespaces —';
+                opt.disabled = true;
+                sel.appendChild(opt);
+                sel.value = '';
+                sel.title = 'Could not load namespaces: ' + nsLoadError;
+                showNotice('Could not load namespaces: ' + nsLoadError);
+                renderStatus();
+            });
     }
 
     // ===== Page shell =====
@@ -626,24 +656,37 @@
     }
 
     // ===== Actions =====
+    // jsonOrThrow resolves a fetch Response to its JSON body, or rejects with
+    // the server's {"error": ...} message (falling back to the HTTP status
+    // when the error body isn't JSON). Shared by postJSON and
+    // loadWatchNamespaces so both surface the same cause text.
+    function jsonOrThrow(r) {
+        if (!r.ok) {
+            return r.json().then(function(j) {
+                throw new Error((j && j.error) || ('HTTP ' + r.status));
+            }, function() { throw new Error('HTTP ' + r.status); });
+        }
+        return r.json();
+    }
+
     function postJSON(url, body) {
         return fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body || {})
-        }).then(function(r) {
-            if (!r.ok) {
-                return r.json().then(function(j) {
-                    throw new Error(j.error || ('HTTP ' + r.status));
-                }, function() { throw new Error('HTTP ' + r.status); });
-            }
-            return r.json();
-        });
+        }).then(jsonOrThrow);
     }
 
     function watchStart() {
         var t = watchTarget();
-        if (!t.namespace) { showNotice('Pick a namespace to watch'); return; }
+        if (!t.namespace) {
+            // An empty pick caused by a failed load needs the cause, not a
+            // prompt to pick from a list that has nothing in it.
+            showNotice(nsLoadError
+                ? 'Could not load namespaces: ' + nsLoadError
+                : 'Pick a namespace to watch');
+            return;
+        }
         postJSON('/api/watch/start', { context: t.context, namespace: t.namespace })
             .then(fetchWatchStatus)
             .catch(function(err) { showNotice(err.message); });

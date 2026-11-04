@@ -33,14 +33,9 @@ history. Seeded 2026-11-03 by `/next-list seed` from the last 15 session docs
 - Nothing leaves Open, Validate or Roadmap without a line in another section.
 - Open, Validate and Roadmap each stay in ID order.
 
-**Next ID:** N-020
+**Next ID:** N-021
 
 ## Open
-
-- **N-003** · raised `2026-0715-1327-podwatch-watch-timeout-and-sse-dot-flex` · value medium
-  `web/embeds/watch.js` `loadWatchNamespaces()` ends in `.catch(function(){})`.
-  A failed `/api/namespaces` leaves the picker empty and Start says "Pick a
-  namespace", with no cause shown. Still true at HEAD.
 
 - **N-004** · raised `2026-0715-1327-podwatch-watch-timeout-and-sse-dot-flex` · value low
   At the max-streams cap (`podwatch/stream.go`, `startStream`) a new pod is
@@ -137,6 +132,12 @@ repair a test. No product change is planned unless the check finds a defect.
   Confirm Pod Watch export (`/api/watch/export`) still downloads correctly in
   KRo.app after `sendLogDownload` switched it to streaming.
 
+- **N-020** · raised `2026-1103-next-list-seed-n001-n003` · value low
+  Follow-up check for N-003: in KRo.app, make `/api/namespaces` fail (e.g.
+  point kro at a kubeconfig with no usable context) and confirm the Watch
+  picker shows "— failed to load namespaces —" with the cause in its tooltip,
+  the notice line shows the cause, and Start repeats it.
+
 ## Roadmap
 
 Wanted but deferred. Not "next"; promote to Open when its time comes.
@@ -155,6 +156,13 @@ Wanted but deferred. Not "next"; promote to Open when its time comes.
 - **N-019** · declined `2026-0818-1749-favorite-cluster-namespace-combos` — Per-browser favorites. Favorites are global to the kro instance, matching how pinned namespaces work.
 
 ## Closed
+
+- **N-003** · raised `2026-0715-1327-podwatch-watch-timeout-and-sse-dot-flex` · closed 2026-11-03
+  `loadWatchNamespaces()` now rejects on non-2xx/network/non-JSON (shared
+  `jsonOrThrow`), shows a disabled "failed to load" picker entry with the
+  cause as tooltip plus a notice, and Start repeats the cause. Confirmed the
+  server's failure shape (503 `{"error":"no kubeconfig context available"}`),
+  which previously rendered as "— no namespaces —". UI check is N-020.
 
 - **N-001** · raised `2026-0713-1446-default-to-last-selected-cluster-namespace` · closed 2026-11-03
   `(*Store).Add` membership loop replaced with `slices.Contains`;
