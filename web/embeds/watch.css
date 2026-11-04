@@ -245,6 +245,16 @@ body.watch-resizing { cursor: row-resize; user-select: none; }
 
 .watch-empty { color: #636e72; font-size: 13px; padding: 14px 8px; }
 
+/* Cap wait queue: one persistent line per session (see pendingLine in
+   watch.js). Amber matches the paused badge: "held, not failed". */
+.watch-pending {
+    color: #b7791f;
+    font-size: 11.5px;
+    padding: 3px 6px 3px 16px;
+    cursor: default;
+}
+body.dark .watch-pending { color: #f6c35b; }
+
 /* Per-namespace group: keeps each watch session's streams visually isolated
    and gives it its own Stop / Clear controls. */
 .watch-session { margin-bottom: 10px; }

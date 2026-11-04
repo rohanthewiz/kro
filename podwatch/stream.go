@@ -12,6 +12,7 @@ import (
 // startStream begins background capture for a newly seen pod: registers the
 // stream (enforcing the stream cap), opens its log file, and spawns the
 // capture goroutine. Called from the watch loop; no-op if already tracked.
+// At the stream cap the pod is queued in sess.pending instead (see pending.go).
 func (m *Manager) startStream(sess *Session, podName string) {
 	m.mu.Lock()
 	if sess.ctx.Err() != nil { // session stopped while an event was in flight
@@ -22,7 +23,15 @@ func (m *Manager) startStream(sess *Session, podName string) {
 		m.mu.Unlock()
 		return
 	}
+	_, wasPending := sess.pending[podName]
 	if sess.noNewStreams {
+		if wasPending {
+			// A pod already waiting for a slot was seen *before* do-not-disturb
+			// went on, so DND (which ignores newly created pods) doesn't claim
+			// it: it stays queued and is retried once DND is turned off.
+			m.mu.Unlock()
+			return
+		}
 		// Do-not-disturb: baseline the pod so it stays ignored even after the
 		// toggle is turned back off (a later re-list won't pick it up).
 		sess.baseline[podName] = struct{}{}
@@ -32,14 +41,31 @@ func (m *Manager) startStream(sess *Session, podName string) {
 	maxN := m.maxStreamsNow()
 	if m.activeStreamCountLocked() >= maxN {
 		// Every slot is held by an active stream; there is nothing ended to
-		// evict, so the new pod is skipped rather than pushing past the cap.
+		// evict, so the pod is queued as pending rather than pushing past the
+		// cap. It is retried when a slot frees (see retryPending). Only the
+		// first skip announces itself: retries that still find the cap full
+		// are silent, so the transient notice fires once per pod while the
+		// persistent count lives in the status payload.
+		if !wasPending {
+			if sess.pending == nil {
+				sess.pending = map[string]time.Time{}
+			}
+			sess.pending[podName] = time.Now()
+		}
+		waiting := len(sess.pending)
 		m.mu.Unlock()
-		m.notifyEvent("limit_reached", map[string]any{
-			"context": sess.Context, "namespace": sess.Namespace,
-			"pod": podName, "max": maxN,
-		})
+		if !wasPending {
+			m.notifyEvent("limit_reached", map[string]any{
+				"context": sess.Context, "namespace": sess.Namespace,
+				"pod": podName, "max": maxN, "waiting": waiting,
+			})
+		}
 		return
 	}
+	// Admitted: a previously queued pod leaves the pending set. No separate
+	// event is needed — the stream_added/stream_state notice below makes the
+	// UI refetch status, which carries the shrunken pending list.
+	delete(sess.pending, podName)
 	// Whole-list cap: this stream will occupy a slot, so drop the oldest ended
 	// streams until the list will fit within maxN. The active check above
 	// guarantees enough ended streams exist to make room.
@@ -67,6 +93,7 @@ func (m *Manager) startStream(sess *Session, podName string) {
 		st.errMsg = err.Error()
 		st.closeLocked(StateError)
 		st.mu.Unlock()
+		m.kickPending() // the slot it briefly held is free again
 		m.notifyEvent("stream_state", m.streamPayload(sess, st))
 		return
 	}
@@ -146,6 +173,7 @@ func (m *Manager) runStream(sess *Session, st *Stream, ctx context.Context, sinc
 		st.closeLocked(StateCompleted)
 	}
 	st.mu.Unlock()
+	m.kickPending() // active → terminal frees a slot (after st.mu: lock order)
 	m.notifyEvent("stream_state", m.streamPayload(sess, st))
 }
 

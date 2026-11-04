@@ -40,7 +40,9 @@ func watchTimeoutSecs() int64 {
 // reconnect loop (informers are overkill for one namespace): on any failure,
 // closure, or 410 Gone we re-list, which both refreshes the resourceVersion
 // and starts streams for pods created during the gap. rv is the
-// resourceVersion from the initial list done in Start.
+// resourceVersion from the initial list done in Start. Pods skipped at the
+// stream cap are retried as soon as a slot frees (sess.slotFreed), not only at
+// the next re-list.
 func (m *Manager) runWatchLoop(sess *Session, rv string) {
 	backoff := watchBackoffMin
 	needRelist := false
@@ -92,27 +94,47 @@ func (m *Manager) runWatchLoop(sess *Session, rv string) {
 		// w.Stop() after the range.
 		watchdog := time.AfterFunc(time.Duration(timeout)*time.Second+watchStallGrace, w.Stop)
 
+		// Two inputs: watch events, and slotFreed wakeups asking us to retry
+		// pods queued at the stream cap (see pending.go). Selecting here keeps
+		// every startStream call on this goroutine. The watch is bound to
+		// sess.ctx, so ResultChan closes on session stop and no separate
+		// ctx.Done case is needed.
 	events:
-		for ev := range w.ResultChan() {
-			switch ev.Type {
-			case watch.Error:
-				// Typically 410 Gone (resourceVersion expired) — re-list.
-				break events
-			case watch.Added:
-				pod, ok := ev.Object.(*coreV1.Pod)
-				if !ok {
-					continue
+		for {
+			select {
+			case <-sess.slotFreed:
+				m.retryPending(sess)
+			case ev, open := <-w.ResultChan():
+				if !open {
+					break events
 				}
-				rv = pod.ResourceVersion
-				if _, existed := sess.baseline[pod.Name]; existed {
-					continue
-				}
-				m.startStream(sess, pod.Name)
-			case watch.Modified, watch.Deleted, watch.Bookmark:
-				// Pod deletion ends its log stream naturally; we only need
-				// these events to keep the resourceVersion fresh.
-				if pod, ok := ev.Object.(*coreV1.Pod); ok {
+				switch ev.Type {
+				case watch.Error:
+					// Typically 410 Gone (resourceVersion expired) — re-list.
+					break events
+				case watch.Added:
+					pod, ok := ev.Object.(*coreV1.Pod)
+					if !ok {
+						continue
+					}
 					rv = pod.ResourceVersion
+					if _, existed := sess.baseline[pod.Name]; existed {
+						continue
+					}
+					m.startStream(sess, pod.Name)
+				case watch.Deleted:
+					// Pod deletion ends its log stream naturally; a pod still
+					// queued for a slot must leave the queue, or a later
+					// retry would open a stream for a pod that is gone.
+					if pod, ok := ev.Object.(*coreV1.Pod); ok {
+						rv = pod.ResourceVersion
+						m.dropPending(sess, pod.Name)
+					}
+				case watch.Modified, watch.Bookmark:
+					// Only needed to keep the resourceVersion fresh.
+					if pod, ok := ev.Object.(*coreV1.Pod); ok {
+						rv = pod.ResourceVersion
+					}
 				}
 			}
 		}
@@ -126,13 +148,22 @@ func (m *Manager) runWatchLoop(sess *Session, rv string) {
 }
 
 // relistAndCatchUp lists the namespace and starts streams for any pod that is
-// neither in the baseline nor already tracked (never re-baselines). Returns
-// the fresh resourceVersion to watch from.
+// neither in the baseline nor already tracked (never re-baselines). Queued
+// (cap-pending) pods are reconciled first: those gone from the list are
+// dropped, and the rest are retried oldest-first ahead of newly found pods, so
+// a pod that has waited longest gets the next free slot. Returns the fresh
+// resourceVersion to watch from.
 func (m *Manager) relistAndCatchUp(sess *Session) (string, error) {
 	list, err := sess.client.CoreV1().Pods(sess.Namespace).List(sess.ctx, metaV1.ListOptions{})
 	if err != nil {
 		return "", err
 	}
+	present := make(map[string]struct{}, len(list.Items))
+	for i := range list.Items {
+		present[list.Items[i].Name] = struct{}{}
+	}
+	m.prunePendingNotIn(sess, present)
+	m.retryPending(sess)
 	for i := range list.Items {
 		name := list.Items[i].Name
 		if _, existed := sess.baseline[name]; existed {

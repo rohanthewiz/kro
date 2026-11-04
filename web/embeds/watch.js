@@ -515,10 +515,17 @@
         // matches the number of rows shown; the cap evicts the oldest ended
         // stream to admit a new pod once full. Active count lives in the tip.
         var countEl = document.getElementById('watch-count');
+        // Pods queued at the cap (every slot held by an active stream) are
+        // appended so the backlog is visible even when the session block that
+        // holds them is scrolled out of view.
+        var waiting = lastStatus.pendingPods || 0;
         countEl.textContent =
-            (lastStatus.totalStreams || 0) + ' / ' + lastStatus.maxStreams + ' streams';
+            (lastStatus.totalStreams || 0) + ' / ' + lastStatus.maxStreams + ' streams' +
+            (waiting ? ' · ' + waiting + ' waiting' : '');
         countEl.title = (lastStatus.activeStreams || 0) + ' capturing now; the rest are ended ' +
-            'streams kept until cleared. At the cap, a new pod evicts the oldest ended stream.';
+            'streams kept until cleared. At the cap, a new pod evicts the oldest ended stream.' +
+            (waiting ? ' ' + waiting + ' pod' + (waiting === 1 ? ' is' : 's are') + ' waiting: every slot ' +
+                'is held by an active stream; they start automatically as slots free up.' : '');
 
         // Sync the max-streams stepper to the server's cap unless a local
         // change is still waiting on its debounced post.
@@ -572,7 +579,7 @@
                         ' title="Remove this namespace\'s ended streams (log files are kept)">✕ Clear</button>' +
                     '<button type="button" class="watch-btn stop" data-act="stop-session"' + sessAttrs +
                         ' title="Stop watching ' + esc(s.context + ' / ' + s.namespace) + '">■ Stop</button>' +
-                '</div>';
+                '</div>' + pendingLine(s);
             if (!s.streams || !s.streams.length) {
                 html += '<div class="watch-empty">' + (s.noNewStreams
                     ? 'No more streams is on — new pods are being ignored.'
@@ -615,6 +622,26 @@
         });
         list.innerHTML = html;
         reconcileFrames();
+    }
+
+    // pendingLine renders a session's cap wait queue as one persistent line
+    // under its header (empty string when nothing is waiting). Pods are named
+    // in the tooltip, oldest first with how long each has waited, rather than
+    // as rows: they have no file or controls yet, and a long queue would push
+    // the real streams out of view. Under "No more streams" the queue is held,
+    // so the line says so instead of promising an automatic start.
+    function pendingLine(s) {
+        var p = s.pending || [];
+        if (!p.length) return '';
+        var tip = p.map(function(x) {
+            var ago = agoText(x.since);
+            return x.pod + (ago ? ' (' + ago + ')' : '');
+        }).join('\n');
+        var label = '⏳ ' + p.length + ' pod' + (p.length === 1 ? '' : 's') + ' waiting for a slot — ' +
+            (s.noNewStreams
+                ? 'held while No more streams is on'
+                : 'starts automatically when a stream ends, or raise the max');
+        return '<div class="watch-pending" title="' + esc(tip) + '">' + esc(label) + '</div>';
     }
 
     // Close frames whose stream no longer exists (e.g. removed from the list).
@@ -757,9 +784,14 @@
             if (msg.event === 'stream_counts') {
                 patchCounts(msg.payload);
             } else if (msg.event === 'limit_reached') {
-                showNotice('Stream limit (' + msg.payload.max + ') reached — skipped pod ' + msg.payload.pod);
+                // Fires once per pod, on its first skip; the persistent
+                // "N waiting" indicator comes from the refetched status.
+                showNotice('Stream limit (' + msg.payload.max + ') reached — pod ' + msg.payload.pod +
+                    ' is waiting for a slot');
+                fetchWatchStatus();
             } else {
-                // session_started/stopped, stream_added/state/removed:
+                // session_started/stopped, stream_added/state/removed,
+                // pending_changed:
                 // a full refetch is cheap and keeps render logic in one place.
                 fetchWatchStatus();
             }

@@ -33,18 +33,9 @@ history. Seeded 2026-11-03 by `/next-list seed` from the last 15 session docs
 - Nothing leaves Open, Validate or Roadmap without a line in another section.
 - Open, Validate and Roadmap each stay in ID order.
 
-**Next ID:** N-021
+**Next ID:** N-022
 
 ## Open
-
-- **N-004** · raised `2026-0715-1327-podwatch-watch-timeout-and-sse-dot-flex` · value low
-  At the max-streams cap (`podwatch/stream.go`, `startStream`) a new pod is
-  skipped and only a transient `limit_reached` SSE notice is sent.
-  *Corrected premise:* the original note said "never retried", but
-  `relistAndCatchUp` (`podwatch/watch_loop.go`) calls `startStream` for every
-  non-baseline pod, so a skipped pod is picked up at the next re-list (about
-  every 4–5 min) if a slot has freed. What remains: the retry is incidental and
-  silent, and there is no persistent "N pods waiting for a slot" indicator.
 
 - **N-006** · raised `2026-0720-1434-podwatch-errors-warnings-files-and-view-dropdown` · value low
   Pod Watch export/download (`WatchExport`) always serves the full main log,
@@ -138,6 +129,13 @@ repair a test. No product change is planned unless the check finds a defect.
   picker shows "— failed to load namespaces —" with the cause in its tooltip,
   the notice line shows the cause, and Start repeats it.
 
+- **N-021** · raised `2026-1103-1914-podwatch-cap-pending-queue-n004` · value low
+  Follow-up check for N-004: rebuild via `mac-install.sh`; in KRo.app set the
+  max-streams stepper to 1, start a watch, and create two pods. Confirm the
+  second shows "⏳ 1 pod waiting for a slot" under the session header and
+  "· 1 waiting" in the stream count, with the pod in the tooltip, and that it
+  starts on its own when the first stream is stopped (■) or the max is raised.
+
 ## Roadmap
 
 Wanted but deferred. Not "next"; promote to Open when its time comes.
@@ -150,12 +148,28 @@ Wanted but deferred. Not "next"; promote to Open when its time comes.
   an error or a watchdog-forced stop. Deferred by that session as negligible
   at this tool's scale. Note: N-004's incidental retry relies on the re-list,
   so doing this would need an explicit retry for cap-skipped pods.
+  *Update 2026-11-03:* N-004 added that explicit retry (`podwatch/pending.go`,
+  woken via `slotFreed`), so that dependency is gone. The re-list still prunes
+  queued pods deleted while the watch was down; a re-Watch without re-list
+  would rely on the Deleted event alone for that.
 
 ## Non-goals
 
 - **N-019** · declined `2026-0818-1749-favorite-cluster-namespace-combos` — Per-browser favorites. Favorites are global to the kro instance, matching how pinned namespaces work.
 
 ## Closed
+
+- **N-004** · raised `2026-0715-1327-podwatch-watch-timeout-and-sse-dot-flex` · closed 2026-11-03, `2026-1103-1914-podwatch-cap-pending-queue-n004`
+  Pods skipped at the stream cap are now queued per session
+  (`Session.pending`, `podwatch/pending.go`) and retried oldest-first as soon
+  as a slot frees: a stream ending, a user stop, a session stop, a raised
+  cap, or DND turned off. The retry runs on the session's watch loop via a
+  coalescing `slotFreed` channel. `limit_reached` fires once per pod; status
+  carries `pending` per session and `pendingPods` overall, shown as a
+  persistent "⏳ N pods waiting for a slot" line plus "· N waiting" in the
+  count. Queued pods leave on Deleted events or when a re-list no longer
+  lists them. DND holds queued pods instead of baselining them. Unit tests in
+  `podwatch/pending_test.go`. UI check is N-021.
 
 - **N-003** · raised `2026-0715-1327-podwatch-watch-timeout-and-sse-dot-flex` · closed 2026-11-03, `2026-1103-1900-next-list-seed-n001-n003`
   `loadWatchNamespaces()` now rejects on non-2xx/network/non-JSON (shared

@@ -26,7 +26,8 @@ const (
 	// SetMaxStreams (driven by the UI stepper); these bound it. When the list
 	// is full, admitting a new stream evicts the oldest ended one so the list
 	// is a rolling window of the most recent streams. Active streams are never
-	// evicted, so a list already full of active streams blocks new pods.
+	// evicted, so when every slot is held by an active stream a new pod is
+	// queued as pending (pending.go) and admitted once a slot frees.
 	defaultMaxStreams = 15
 	absMaxStreams     = 100
 
@@ -103,6 +104,13 @@ type Session struct {
 	baseline     map[string]struct{}
 	streams      map[string]*Stream // pod name -> stream; guarded by Manager.mu
 	noNewStreams bool               // do-not-disturb: ignore newly created pods; guarded by Manager.mu
+	// pending holds pods skipped at the stream cap, keyed to when they first
+	// hit it; they are retried oldest-first when a slot frees. Guarded by
+	// Manager.mu. Lazily allocated (nil reads are fine).
+	pending map[string]time.Time
+	// slotFreed (buffered, cap 1) wakes the watch loop to retry pending pods;
+	// see kickPending. Never closed: the loop exits on sess.ctx instead.
+	slotFreed chan struct{}
 }
 
 // Stream captures one pod's logs to a file and fans lines out to tee
@@ -116,19 +124,19 @@ type Stream struct {
 	WarnCount  atomic.Int64 // approx. warning entries: ticks on new-level lines, not inherited continuations
 	LastLineAt atomic.Int64 // unix nanos of the last captured line
 
-	mu       sync.Mutex
-	state    StreamState
-	errMsg   string
-	filePath string
-	errPath  string             // <base>.errors.log; set at start, file opened lazily
-	warnPath string             // <base>.warnings.log; set at start, file opened lazily
-	cancel   context.CancelFunc // cancels the kube log stream (pause/stop)
-	file     *os.File
-	w        *bufio.Writer
-	errFile  *os.File // errors companion; opened on the first error line
-	errW     *bufio.Writer
-	warnFile *os.File // warnings companion; opened on the first warning line
-	warnW    *bufio.Writer
+	mu        sync.Mutex
+	state     StreamState
+	errMsg    string
+	filePath  string
+	errPath   string             // <base>.errors.log; set at start, file opened lazily
+	warnPath  string             // <base>.warnings.log; set at start, file opened lazily
+	cancel    context.CancelFunc // cancels the kube log stream (pause/stop)
+	file      *os.File
+	w         *bufio.Writer
+	errFile   *os.File // errors companion; opened on the first error line
+	errW      *bufio.Writer
+	warnFile  *os.File // warnings companion; opened on the first warning line
+	warnW     *bufio.Writer
 	lastRoute string   // last classified bucket ("err"|"wrn"|"oth"|""), for continuation-line inheritance
 	ring      []string // circular: oldest at ringAt once full
 	ringAt    int
@@ -157,12 +165,14 @@ type SessionStatus struct {
 	StartedAt    time.Time      `json:"startedAt"`
 	NoNewStreams bool           `json:"noNewStreams"`
 	Streams      []StreamStatus `json:"streams"`
+	Pending      []PendingPod   `json:"pending"` // pods waiting for a slot at the stream cap, oldest first
 }
 
 type StatusPayload struct {
 	MaxStreams    int             `json:"maxStreams"`
 	ActiveStreams int             `json:"activeStreams"`
 	TotalStreams  int             `json:"totalStreams"` // active + ended streams in the list; capped at MaxStreams
+	PendingPods   int             `json:"pendingPods"`  // pods waiting for a slot, across all sessions
 	Sessions      []SessionStatus `json:"sessions"`
 }
 
@@ -192,6 +202,7 @@ func (m *Manager) SetMaxStreams(n int) int {
 	n = max(1, min(n, absMaxStreams))
 	m.maxStreams.Store(int64(n))
 	m.notifyEvent("max_streams", map[string]any{"max": n})
+	m.kickPending() // a raised cap opens slots for queued pods
 	return n
 }
 
@@ -219,6 +230,9 @@ func (m *Manager) SetNoNewStreams(ctxName, ns string, on bool) error {
 		return ErrNoSession
 	}
 	sess.noNewStreams = on
+	if !on && len(sess.pending) > 0 {
+		sess.kick() // pods queued before DND are held while on; release them
+	}
 	m.mu.Unlock()
 	m.notifyEvent("session_no_new", map[string]any{
 		"context": ctxName, "namespace": ns, "noNewStreams": on,
@@ -291,6 +305,8 @@ func (m *Manager) Start(ctxName, ns string) (*SessionStatus, error) {
 		client:    client,
 		baseline:  map[string]struct{}{},
 		streams:   map[string]*Stream{},
+		pending:   map[string]time.Time{},
+		slotFreed: make(chan struct{}, 1),
 	}
 
 	key := sessKey(ctxName, ns)
@@ -345,6 +361,10 @@ func (m *Manager) Stop(ctxName, ns string) error {
 	for _, st := range streams {
 		st.finalize(StateStopped, "stopped (watch ended)")
 	}
+	// This session's active streams no longer count against the global cap,
+	// so other sessions' queued pods may now fit. (Its own queue is discarded
+	// with the session.)
+	m.kickPending()
 	m.notifyEvent("session_stopped", map[string]any{"context": ctxName, "namespace": ns})
 	return nil
 }
@@ -358,6 +378,10 @@ func (m *Manager) Status() StatusPayload {
 	}
 	active := m.activeStreamCountLocked()
 	total := m.totalStreamCountLocked()
+	pending := 0
+	for _, s := range sessions {
+		pending += len(s.pending)
+	}
 	m.mu.Unlock()
 
 	sort.Slice(sessions, func(i, j int) bool {
@@ -367,7 +391,7 @@ func (m *Manager) Status() StatusPayload {
 		return sessions[i].Namespace < sessions[j].Namespace
 	})
 
-	out := StatusPayload{MaxStreams: m.maxStreamsNow(), ActiveStreams: active, TotalStreams: total, Sessions: []SessionStatus{}}
+	out := StatusPayload{MaxStreams: m.maxStreamsNow(), ActiveStreams: active, TotalStreams: total, PendingPods: pending, Sessions: []SessionStatus{}}
 	for _, s := range sessions {
 		out.Sessions = append(out.Sessions, m.sessionStatus(s))
 	}
@@ -377,6 +401,7 @@ func (m *Manager) Status() StatusPayload {
 func (m *Manager) sessionStatus(sess *Session) SessionStatus {
 	m.mu.Lock()
 	noNew := sess.noNewStreams
+	pending := sess.pendingOldestFirstLocked()
 	streams := make([]*Stream, 0, len(sess.streams))
 	for _, st := range sess.streams {
 		streams = append(streams, st)
@@ -390,7 +415,7 @@ func (m *Manager) sessionStatus(sess *Session) SessionStatus {
 		return streams[i].Pod < streams[j].Pod
 	})
 
-	ss := SessionStatus{Context: sess.Context, Namespace: sess.Namespace, StartedAt: sess.StartedAt, NoNewStreams: noNew, Streams: []StreamStatus{}}
+	ss := SessionStatus{Context: sess.Context, Namespace: sess.Namespace, StartedAt: sess.StartedAt, NoNewStreams: noNew, Streams: []StreamStatus{}, Pending: pending}
 	for _, st := range streams {
 		ss.Streams = append(ss.Streams, st.status())
 	}
@@ -502,6 +527,7 @@ func (m *Manager) StreamAction(ctxName, ns, pod, action string) error {
 		st.writeMarkerLocked("stopped")
 		st.closeLocked(StateStopped)
 		st.mu.Unlock()
+		m.kickPending() // a user stop frees an active slot
 
 	case "pause":
 		st.mu.Lock()

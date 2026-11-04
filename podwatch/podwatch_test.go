@@ -107,8 +107,10 @@ func newTestSession(t *testing.T) (*Manager, *Session) {
 	sess := &Session{
 		Context: "c1", Namespace: "n1", StartedAt: time.Now(),
 		ctx: ctx, cancel: cancel,
-		baseline: map[string]struct{}{},
-		streams:  map[string]*Stream{},
+		baseline:  map[string]struct{}{},
+		streams:   map[string]*Stream{},
+		pending:   map[string]time.Time{},
+		slotFreed: make(chan struct{}, 1),
 	}
 	m.sessions[sessKey("c1", "n1")] = sess
 	t.Cleanup(cancel)
