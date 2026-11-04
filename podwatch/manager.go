@@ -46,6 +46,11 @@ var (
 	ErrNoStream      = errors.New("no such stream")
 	ErrBadAction     = errors.New("unknown stream action")
 	ErrBadTransition = errors.New("action not valid in the stream's current state")
+	// ErrNoIssueFile: an errors/warnings export was asked for but the stream
+	// has not captured a line in that bucket yet. Companion files are created
+	// lazily on the first matching line, so "no file" means "nothing to export"
+	// rather than a pruned or broken file.
+	ErrNoIssueFile = errors.New("no lines captured for this view yet")
 )
 
 // StreamState is the lifecycle state of one pod's log stream.
@@ -666,9 +671,19 @@ func (m *Manager) Subscribe(ctxName, ns, pod string, tail int, view string) (rep
 	return replay, sub, cancel, nil
 }
 
-// ExportPath flushes a stream's buffered writer (so the file is current)
-// and returns the log file path, for serving the capture as a download.
-func (m *Manager) ExportPath(ctxName, ns, pod string) (string, error) {
+// ExportPath flushes a stream's buffered writers (so the files are current)
+// and returns the path of the file backing the requested console view, for
+// serving the capture as a download:
+//
+//	view "" / "all"  → main log      <pod>-<ts>.log
+//	view "errors"    → companion     <pod>-<ts>.errors.log
+//	view "warnings"  → companion     <pod>-<ts>.warnings.log
+//
+// The view names and mapping are the same ones Subscribe uses (viewFilter),
+// so a download always matches the file the console frame is showing. A
+// companion that does not exist yet (created lazily on the first matching
+// line) yields ErrNoIssueFile instead of a path the caller would fail to open.
+func (m *Manager) ExportPath(ctxName, ns, pod, view string) (string, error) {
 	m.mu.Lock()
 	sess, ok := m.sessions[sessKey(ctxName, ns)]
 	if !ok {
@@ -687,8 +702,35 @@ func (m *Manager) ExportPath(ctxName, ns, pod string) (string, error) {
 	if st.filePath == "" {
 		return "", ErrNoStream
 	}
+	// flushLocked covers the main log and both companions, so whichever file
+	// is chosen below is current as of this call.
 	st.flushLocked()
-	return st.filePath, nil
+
+	switch viewFilter(view) {
+	case "err":
+		return issueExportPath(st.errPath)
+	case "wrn":
+		return issueExportPath(st.warnPath)
+	default:
+		return st.filePath, nil
+	}
+}
+
+// issueExportPath returns a companion path if the file exists on disk, else
+// ErrNoIssueFile. The stat is done here (under st.mu, right after the flush)
+// so the "no errors yet" case gets its own error rather than the generic
+// not-found the download helper reports for a file pruned by retention.
+func issueExportPath(path string) (string, error) {
+	if path == "" {
+		return "", ErrNoIssueFile
+	}
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", ErrNoIssueFile
+		}
+		return "", err
+	}
+	return path, nil
 }
 
 func (m *Manager) streamPayload(sess *Session, st *Stream) map[string]any {

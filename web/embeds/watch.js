@@ -596,8 +596,13 @@
                 var actions = '<button type="button" class="watch-btn' + (teed ? ' tee-on' : '') +
                     '" data-act="tee"' + dataAttrs + ' title="Toggle console frame">⧉ Console</button>';
                 if (st.file) {
+                    // The tooltip names the file the download will be, which
+                    // follows the open frame's view dropdown (see exportLog).
+                    var exportView = teed ? frames[key].view : 'all';
+                    var exportWhat = exportView === 'errors' ? 'the errors file (frame view)'
+                        : exportView === 'warnings' ? 'the warnings file (frame view)' : 'the log file';
                     actions += '<button type="button" class="watch-btn" data-act="export"' + dataAttrs +
-                        ' title="Export: download the log file">⤓</button>';
+                        ' title="Export: download ' + exportWhat + '">⤓</button>';
                 }
                 if (st.state === 'paused') {
                     actions += '<button type="button" class="watch-btn" data-act="resume"' + dataAttrs + ' title="Resume capture">▶</button>';
@@ -760,14 +765,48 @@
 
     // The server sets Content-Disposition: attachment, so a plain navigation
     // becomes a save — the browser picks the location (Downloads / dialog).
+    //
+    // The export follows the pod's console frame: if a frame is open on the
+    // Errors or Warnings view, that companion file is downloaded (matching
+    // what Copy copies); with no frame, or the All view, it is the full log.
+    // Companion files only exist once a matching line was captured, so an
+    // empty bucket is reported here instead of navigating to a 404 — in
+    // WKWebView a failed attachment navigation gives no useful feedback.
+    // Two signals must both say "empty": the entry count (pushed on an
+    // interval, so it can briefly lag a fresh error) and the frame itself
+    // (in an issue view it replays the companion file whole). If either sees
+    // lines we go to the server, which still answers 404 for a truly empty
+    // bucket.
     function exportLog(ctx, ns, pod) {
+        var frame = frames[frameKey(ctx, ns, pod)];
+        var view = frame ? frame.view : 'all';
+        if (view === 'errors' || view === 'warnings') {
+            var n = view === 'errors' ? frame.errCount : frame.warnCount;
+            if (!n && !frameHasLogLines(frame)) {
+                showNotice('No ' + view + ' captured for ' + pod + ' yet — nothing to export');
+                return;
+            }
+        }
         var a = document.createElement('a');
         a.href = '/api/watch/export?context=' + encodeURIComponent(ctx) +
-            '&namespace=' + encodeURIComponent(ns) + '&pod=' + encodeURIComponent(pod);
+            '&namespace=' + encodeURIComponent(ns) + '&pod=' + encodeURIComponent(pod) +
+            '&view=' + encodeURIComponent(view);
         a.download = '';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
+    }
+
+    // True if the frame holds at least one captured log line, rendered or
+    // still queued for the next animation frame. End-of-stream markers (body
+    // spans with .watch-frame-end, NUL-prefixed entries in buf) don't count —
+    // they are UI text, not file content.
+    function frameHasLogLines(frame) {
+        if (frame.body.querySelector('span:not(.watch-frame-end)')) return true;
+        for (var i = 0; i < frame.buf.length; i++) {
+            if (frame.buf[i].charCodeAt(0) !== 0) return true;
+        }
+        return false;
     }
 
     // ===== Status SSE (list updates while the modal is open) =====
@@ -998,6 +1037,7 @@
         if (view !== 'errors' && view !== 'warnings') view = 'all';
         if (frame.view === view) return;
         frame.view = view;
+        renderStatus(); // the list row's export tooltip names the frame's view
         frame.buf = [];
         frame.body.innerHTML = '';
         frame.lastLvl = null;

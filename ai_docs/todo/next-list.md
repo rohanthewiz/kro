@@ -33,16 +33,9 @@ history. Seeded 2026-11-03 by `/next-list seed` from the last 15 session docs
 - Nothing leaves Open, Validate or Roadmap without a line in another section.
 - Open, Validate and Roadmap each stay in ID order.
 
-**Next ID:** N-022
+**Next ID:** N-023
 
 ## Open
-
-- **N-006** · raised `2026-0720-1434-podwatch-errors-warnings-files-and-view-dropdown` · value low
-  Pod Watch export/download (`WatchExport`) always serves the full main log,
-  whatever the per-frame view dropdown shows (Errors/Warnings). Copy already
-  copies the on-screen view. Related to the deliberate trade-off in
-  `2026-0610-1325-log-view-level-filtering` (export includes filter-hidden
-  lines), but that was the level filter, not the view dropdown.
 
 - **N-007** · raised `2026-0720-1553-podwatch-whole-list-cap-and-approx-entry-counts` · value low
   The per-row main "N lines" count in Pod Watch (`watch.js`, `st.lines + '
@@ -136,6 +129,13 @@ repair a test. No product change is planned unless the check finds a defect.
   "· 1 waiting" in the stream count, with the pod in the tooltip, and that it
   starts on its own when the first stream is stopped (■) or the max is raised.
 
+- **N-022** · raised `2026-1103-1952-podwatch-export-follows-view-n006` · value low
+  Follow-up check for N-006: rebuild via `mac-install.sh`; in KRo.app open a
+  Pod Watch console frame on a pod logging errors, switch it to Errors, and
+  confirm the row's ⤓ tooltip says "the errors file" and the download is
+  `<pod>-<ts>.errors.log`. On a pod with no warnings, Warnings + ⤓ should show
+  the "nothing to export" notice instead of a failed download.
+
 ## Roadmap
 
 Wanted but deferred. Not "next"; promote to Open when its time comes.
@@ -158,6 +158,17 @@ Wanted but deferred. Not "next"; promote to Open when its time comes.
 - **N-019** · declined `2026-0818-1749-favorite-cluster-namespace-combos` — Per-browser favorites. Favorites are global to the kro instance, matching how pinned namespaces work.
 
 ## Closed
+
+- **N-006** · raised `2026-0720-1434-podwatch-errors-warnings-files-and-view-dropdown` · closed 2026-11-03, `2026-1103-1952-podwatch-export-follows-view-n006`
+  Pod Watch export now follows the pod's console-frame view dropdown:
+  `/api/watch/export` takes `?view=all|errors|warnings` and
+  `Manager.ExportPath(ctx, ns, pod, view)` serves the matching companion file
+  (flushed first). An empty bucket (companion never created) is the new
+  `ErrNoIssueFile` → 404; the UI checks first and shows a notice instead.
+  No frame open, or the All view, is still the full main log. The level
+  filter stays out of export, as decided in
+  `2026-0610-1325-log-view-level-filtering`. Test: `TestExportPathView`. UI
+  check is N-022.
 
 - **N-004** · raised `2026-0715-1327-podwatch-watch-timeout-and-sse-dot-flex` · closed 2026-11-03, `2026-1103-1914-podwatch-cap-pending-queue-n004`
   Pods skipped at the stream cap are now queued per session

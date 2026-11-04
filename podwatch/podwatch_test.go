@@ -585,7 +585,7 @@ func TestExportPath(t *testing.T) {
 	sess.streams["p"] = st
 	st.writeLine("buffered-but-not-flushed")
 
-	got, err := m.ExportPath("c1", "n1", "p")
+	got, err := m.ExportPath("c1", "n1", "p", "")
 	if err != nil || got != path {
 		t.Fatalf("ExportPath = %q, %v", got, err)
 	}
@@ -594,11 +594,60 @@ func TestExportPath(t *testing.T) {
 		t.Errorf("ExportPath should flush before returning; file=%q err=%v", raw, err)
 	}
 
-	if _, err := m.ExportPath("c1", "n1", "nope"); err != ErrNoStream {
+	if _, err := m.ExportPath("c1", "n1", "nope", ""); err != ErrNoStream {
 		t.Errorf("missing stream err = %v, want ErrNoStream", err)
 	}
-	if _, err := m.ExportPath("cX", "nX", "p"); err != ErrNoSession {
+	if _, err := m.ExportPath("cX", "nX", "p", ""); err != ErrNoSession {
 		t.Errorf("missing session err = %v, want ErrNoSession", err)
+	}
+}
+
+// TestExportPathView checks that the export follows the console frame's view
+// dropdown: "errors"/"warnings" serve the (flushed) companion file, "all" and
+// unknown values the main log, and an empty bucket — whose companion is never
+// created — reports ErrNoIssueFile rather than a path that cannot be opened.
+func TestExportPathView(t *testing.T) {
+	m, sess := newTestSession(t)
+	path := logFilePath(m.logDir, "c1", "n1", "p", time.Now())
+	f, w, err := openLogFile(path)
+	if err != nil {
+		t.Fatalf("openLogFile: %v", err)
+	}
+	st := &Stream{
+		Pod: "p", state: StateRunning, subs: map[chan string]string{},
+		filePath: path, errPath: companionPath(path, "errors"), warnPath: companionPath(path, "warnings"),
+		file: f, w: w,
+	}
+	sess.streams["p"] = st
+
+	st.writeLine(`level=info msg="starting"`)
+	st.writeLine(`level=error msg="boom"`) // buffered, not yet flushed
+
+	// No warning has been seen, so the warnings companion does not exist.
+	if _, err := m.ExportPath("c1", "n1", "p", "warnings"); err != ErrNoIssueFile {
+		t.Errorf("warnings export with no warnings: err = %v, want ErrNoIssueFile", err)
+	}
+
+	got, err := m.ExportPath("c1", "n1", "p", "errors")
+	if err != nil || got != companionPath(path, "errors") {
+		t.Fatalf("errors export = %q, %v; want %q", got, err, companionPath(path, "errors"))
+	}
+	raw, err := os.ReadFile(got)
+	if err != nil || string(raw) != "level=error msg=\"boom\"\n" {
+		t.Errorf("errors export must be flushed and hold only error lines; file=%q err=%v", raw, err)
+	}
+
+	// Once a warning arrives the warnings view becomes exportable.
+	st.writeLine(`level=warn msg="careful"`)
+	if got, err := m.ExportPath("c1", "n1", "p", "warnings"); err != nil || got != companionPath(path, "warnings") {
+		t.Errorf("warnings export = %q, %v", got, err)
+	}
+
+	// "all", empty, and unrecognized views fall back to the full main log.
+	for _, view := range []string{"all", "", "bogus"} {
+		if got, err := m.ExportPath("c1", "n1", "p", view); err != nil || got != path {
+			t.Errorf("view %q export = %q, %v; want main log %q", view, got, err, path)
+		}
 	}
 }
 

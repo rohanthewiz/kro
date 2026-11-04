@@ -21,7 +21,8 @@ func watchErrStatus(err error) int {
 	switch {
 	case errors.Is(err, podwatch.ErrSessionExists), errors.Is(err, podwatch.ErrBadTransition):
 		return http.StatusConflict
-	case errors.Is(err, podwatch.ErrNoSession), errors.Is(err, podwatch.ErrNoStream):
+	case errors.Is(err, podwatch.ErrNoSession), errors.Is(err, podwatch.ErrNoStream),
+		errors.Is(err, podwatch.ErrNoIssueFile):
 		return http.StatusNotFound
 	case errors.Is(err, podwatch.ErrBadAction):
 		return http.StatusBadRequest
@@ -165,17 +166,25 @@ func (h *handlers) WatchClear(c rweb.Context) error {
 }
 
 // WatchExport serves one stream's log file as a text download, flushing the
-// stream's write buffer first so the file is current.
-// GET /api/watch/export?context=..&namespace=..&pod=..
+// stream's write buffers first so the file is current.
+// GET /api/watch/export?context=..&namespace=..&pod=..[&view=all|errors|warnings]
+//
+// view mirrors the console frame's file dropdown (and /sse/watch-logs?view=):
+// "errors"/"warnings" serve that bucket's untruncated companion file, anything
+// else (including absent) the full main log. The download therefore matches
+// what the frame shows, as Copy already does. The per-frame *level filter*
+// (hide-info etc.) is deliberately not applied — export is the file, not the
+// rendered buffer (see the 2026-0610 log-view-level-filtering session).
 func (h *handlers) WatchExport(c rweb.Context) error {
 	req := c.Request()
 	ctxName, ns, pod := req.QueryParam("context"), req.QueryParam("namespace"), req.QueryParam("pod")
+	view := req.QueryParam("view")
 	if ctxName == "" || ns == "" || pod == "" {
 		return writeJSONErr(c, http.StatusBadRequest, serr.New("context, namespace, and pod are required"))
 	}
 	// Only the manager's own path for the stream is ever served — no
 	// client-supplied paths touch the filesystem.
-	path, err := h.mgr.ExportPath(ctxName, ns, pod)
+	path, err := h.mgr.ExportPath(ctxName, ns, pod, view)
 	if err != nil {
 		return writeJSONErr(c, watchErrStatus(err), err)
 	}
