@@ -22,3 +22,8 @@ static/
 *duck
 *.ddb
 *.wal
+
+# Local working folders (cats-todo backlog, editor state, scratch)
+.cats-todo/
+.ced/
+scratch/
