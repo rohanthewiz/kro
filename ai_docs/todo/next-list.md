@@ -132,7 +132,7 @@ repair a test. No product change is planned unless the check finds a defect.
   Confirm Pod Watch export (`/api/watch/export`) still downloads correctly in
   KRo.app after `sendLogDownload` switched it to streaming.
 
-- **N-020** · raised `2026-1103-next-list-seed-n001-n003` · value low
+- **N-020** · raised `2026-1103-1900-next-list-seed-n001-n003` · value low
   Follow-up check for N-003: in KRo.app, make `/api/namespaces` fail (e.g.
   point kro at a kubeconfig with no usable context) and confirm the Watch
   picker shows "— failed to load namespaces —" with the cause in its tooltip,
@@ -157,14 +157,14 @@ Wanted but deferred. Not "next"; promote to Open when its time comes.
 
 ## Closed
 
-- **N-003** · raised `2026-0715-1327-podwatch-watch-timeout-and-sse-dot-flex` · closed 2026-11-03
+- **N-003** · raised `2026-0715-1327-podwatch-watch-timeout-and-sse-dot-flex` · closed 2026-11-03, `2026-1103-1900-next-list-seed-n001-n003`
   `loadWatchNamespaces()` now rejects on non-2xx/network/non-JSON (shared
   `jsonOrThrow`), shows a disabled "failed to load" picker entry with the
   cause as tooltip plus a notice, and Start repeats the cause. Confirmed the
   server's failure shape (503 `{"error":"no kubeconfig context available"}`),
   which previously rendered as "— no namespaces —". UI check is N-020.
 
-- **N-001** · raised `2026-0713-1446-default-to-last-selected-cluster-namespace` · closed 2026-11-03
+- **N-001** · raised `2026-0713-1446-default-to-last-selected-cluster-namespace` · closed 2026-11-03, `2026-1103-1900-next-list-seed-n001-n003`
   `(*Store).Add` membership loop replaced with `slices.Contains`;
   `go test ./state/` passes.
 
