@@ -1,7 +1,9 @@
 /* Favorites — saved Cluster/Namespace destinations with three access paths:
 
      ★ header toggle      star / unstar the current selection
-     chip bar             click to switch, drag to reorder, dbl-click to rename
+     chip bar             click to switch, drag to reorder, dbl-click to rename;
+                          focused chip: ←/→ move focus, Alt+←/→ reorder,
+                          Enter/Space switch, F2 rename
      Ctrl+1 … Ctrl+9      jump to the Nth chip from anywhere
      Cmd/Ctrl+K           quick switcher over every known destination
 
@@ -130,10 +132,14 @@
 
         var tip = f.context + ' / ' + f.namespace +
             (idx < MAX_HOTKEYS ? '  (Ctrl+' + (idx + 1) + ')' : '') +
-            '\ndouble-click to rename · drag to reorder';
+            '\ndouble-click or F2 to rename · drag or ' + (isMac ? '⌥' : 'Alt+') +
+            '←/→ to reorder';
 
+        // tabindex/role make the chip reachable and operable from the
+        // keyboard (see onChipsKeydown); it is a span only so the × button
+        // can nest inside it, which a <button> may not contain.
         return '<span class="fav-chip' + (isCurrent(f) ? ' current' : '') + '"' +
-            ' draggable="true" data-idx="' + idx + '"' +
+            ' draggable="true" tabindex="0" role="button" data-idx="' + idx + '"' +
             ' data-ctx="' + esc(f.context) + '" data-ns="' + esc(f.namespace) + '"' +
             ' title="' + esc(tip) + '">' +
             hotkey + body +
@@ -141,14 +147,37 @@
             '</span>';
     }
 
+    // Identity (context + namespace) of the chip that should keep keyboard
+    // focus across a re-render. The chip bar is rebuilt via innerHTML on every
+    // change — including the server's reply to a reorder — which would
+    // otherwise drop focus to <body> mid-way through a series of Alt+→ moves.
+    // Identity rather than index, because a reorder is exactly what moves it.
+    function favKey(ctx, ns) { return ctx + '\n' + ns; }
+
     function renderChips() {
         var host = document.getElementById('fav-chips');
         if (!host) return;
+
+        var ae = document.activeElement;
+        var focusKey = (ae && ae.classList && ae.classList.contains('fav-chip') && host.contains(ae))
+            ? favKey(ae.dataset.ctx, ae.dataset.ns) : null;
+
         if (!favorites.length) {
             host.innerHTML = '<span class="fav-empty">Star a Cluster / NS above to pin it here</span>';
             return;
         }
         host.innerHTML = favorites.map(chipHTML).join('');
+        if (focusKey) focusChipByKey(focusKey);
+    }
+
+    function focusChipByKey(key) {
+        var chips = document.querySelectorAll('#fav-chips .fav-chip');
+        for (var i = 0; i < chips.length; i++) {
+            if (favKey(chips[i].dataset.ctx, chips[i].dataset.ns) === key) {
+                chips[i].focus();
+                return;
+            }
+        }
     }
 
     function renderStar() {
@@ -220,6 +249,56 @@
             f.label || '');
         if (next === null) return; // cancelled
         renameFavorite(f.context, f.namespace, next.trim());
+    }
+
+    // --- keyboard: focus, switch, rename, reorder ---
+    //
+    // The keyboard counterpart of click / dbl-click / drag on a focused chip:
+    //   ← / →          move focus to the previous / next chip
+    //   Alt+← / Alt+→  move the chip one slot (Option on macOS), wrapping is
+    //                  deliberately not done — an end chip just stays put
+    //   Enter / Space  switch to it
+    //   F2             rename it
+    // Only keys whose target is the chip itself are handled: the nested ×
+    // button keeps its native Enter/Space → click → remove behaviour.
+    function onChipsKeydown(e) {
+        var chip = e.target;
+        if (!chip.classList || !chip.classList.contains('fav-chip')) return;
+        var idx = parseInt(chip.dataset.idx, 10);
+        if (e.metaKey || e.ctrlKey) return; // leave Ctrl+digit, Cmd+K etc. to the globals
+
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            e.preventDefault();
+            var dir = e.key === 'ArrowLeft' ? -1 : 1;
+            var to = idx + dir;
+            if (to < 0 || to >= favorites.length) return;
+            if (e.altKey) {
+                moveFavorite(idx, to);
+            } else {
+                var chips = document.querySelectorAll('#fav-chips .fav-chip');
+                if (chips[to]) chips[to].focus();
+            }
+            return;
+        }
+        if (e.altKey || e.shiftKey) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault(); // Space would otherwise scroll the page
+            goTo(chip.dataset.ctx, chip.dataset.ns);
+        } else if (e.key === 'F2') {
+            e.preventDefault();
+            onChipsDblClick(e); // same prompt; it resolves the chip from e.target
+        }
+    }
+
+    // moveFavorite moves the favorite at index from to index to (adjacent
+    // slots in practice), repaints, and persists — the same local-first then
+    // reconcile path a drop takes. renderChips carries focus along with the
+    // moved chip because it tracks focus by identity.
+    function moveFavorite(from, to) {
+        var moved = favorites.splice(from, 1)[0];
+        favorites.splice(to, 0, moved);
+        renderChips();
+        persistOrder();
     }
 
     // --- drag to reorder ---
@@ -535,6 +614,7 @@
         if (chips) {
             chips.addEventListener('click', onChipsClick);
             chips.addEventListener('dblclick', onChipsDblClick);
+            chips.addEventListener('keydown', onChipsKeydown);
             chips.addEventListener('dragstart', onDragStart);
             chips.addEventListener('dragover', onDragOver);
             chips.addEventListener('dragleave', onDragLeave);

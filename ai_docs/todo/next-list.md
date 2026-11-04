@@ -33,7 +33,7 @@ history. Seeded 2026-11-03 by `/next-list seed` from the last 15 session docs
 - Nothing leaves Open, Validate or Roadmap without a line in another section.
 - Open, Validate and Roadmap each stay in ID order.
 
-**Next ID:** N-025
+**Next ID:** N-027
 
 ## Open
 
@@ -42,10 +42,6 @@ history. Seeded 2026-11-03 by `/next-list seed` from the last 15 session docs
   lines'`) is still literal lines, while Errors/Warnings counts are now
   approximate entries. The user may want it as approx entries too (offered,
   not requested).
-
-- **N-008** · raised `2026-0818-1749-favorite-cluster-namespace-combos` · value low
-  Favorite chips can only be reordered by dragging (`favorites.js`); there is
-  no keyboard path to reorder.
 
 - **N-009** · raised `2026-0818-1749-favorite-cluster-namespace-combos` · value low
   The quick-switcher palette lists only pinned/known namespaces; it never asks
@@ -59,10 +55,6 @@ history. Seeded 2026-11-03 by `/next-list seed` from the last 15 session docs
   mounts `pods-orphan` (the section builder remains in `resources.js` for
   re-mounting). A cleanup pass could drop the key. Harmless; candidate for
   Non-goals.
-
-- **N-011** · raised `2026-0826-1817-all-pods-filter-and-orphan-reconcile` · value low
-  Keyboard shortcut to focus the pods filter box (`/` is the obvious one). Not
-  requested.
 
 - **N-013** · raised `2026-1016-1505-live-log-capture-and-streamed-download` · value medium
   Tag an rweb release containing the streaming API (rweb's own list item
@@ -136,6 +128,18 @@ repair a test. No product change is planned unless the check finds a defect.
   top, the view stays smooth, a reader scrolled up does not jump, search
   counts stay right across a trim, and ⤓ still downloads every line.
 
+- **N-025** · raised `2026-1104-1328-keyboard-fav-reorder-and-pod-filter-slash-n008-n011` · value low
+  Follow-up check for N-008: rebuild via `mac-install.sh`; in KRo.app Tab
+  into the favorites chip bar and confirm the focus ring shows, ←/→ move
+  focus, ⌥←/⌥→ move the chip (and the order survives a reload), Enter/Space
+  switch, F2 opens the rename prompt, and the × appears on the focused chip.
+
+- **N-026** · raised `2026-1104-1328-keyboard-fav-reorder-and-pod-filter-slash-n008-n011` · value low
+  Follow-up check for N-011: in KRo.app press `/` on the Workloads and
+  Deployments tabs and confirm it focuses that tab's pod filter (selecting
+  any old query), does nothing on the Pod Watch page or with the section
+  collapsed, and still types a `/` in the terminal and the quick switcher.
+
 ## Roadmap
 
 Wanted but deferred. Not "next"; promote to Open when its time comes.
@@ -158,6 +162,23 @@ Wanted but deferred. Not "next"; promote to Open when its time comes.
 - **N-019** · declined `2026-0818-1749-favorite-cluster-namespace-combos` — Per-browser favorites. Favorites are global to the kro instance, matching how pinned namespaces work.
 
 ## Closed
+
+- **N-011** · raised `2026-0826-1817-all-pods-filter-and-orphan-reconcile` · closed 2026-11-04, `2026-1104-1328-keyboard-fav-reorder-and-pod-filter-slash-n008-n011`
+  A bare `/` outside any text field, with no modal open, focuses (and
+  selects) the first visible `.pod-filter-input`, i.e. the one in the tab on
+  screen and not in a collapsed section (`resources.js`). The placeholder
+  now hints `( / )`. Checked with a jsdom harness (not committed). UI check
+  is N-026.
+
+- **N-008** · raised `2026-0818-1749-favorite-cluster-namespace-combos` · closed 2026-11-04, `2026-1104-1328-keyboard-fav-reorder-and-pod-filter-slash-n008-n011`
+  Favorite chips are now focusable (`tabindex="0"`, `role="button"`) with
+  `onChipsKeydown` in `favorites.js`: ←/→ move focus, Alt/⌥+←/→ move the chip
+  one slot through `moveFavorite` (local repaint, then `persistOrder`, the
+  same path as a drop), Enter/Space switch, F2 renames. `renderChips` keeps
+  focus on the same favorite across re-renders, tracked by ctx/ns identity
+  rather than index, so a run of moves isn't interrupted by the server's
+  reply. Focus ring via `:focus-visible`; the × shows on `:focus-within`.
+  Checked with a jsdom harness (not committed). UI check is N-025.
 
 - **N-016** · raised `2026-1016-1505-live-log-capture-and-streamed-download` · closed 2026-11-04, `2026-1104-1325-logs-modal-resume-and-dom-cap-n015-n016`
   A Logs-modal reconnect (pill click or EventSource's own retry) now resumes

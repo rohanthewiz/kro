@@ -73,6 +73,13 @@
     border-color: #00b894;
     box-shadow: inset 0 0 0 1px rgba(0,184,148,0.35);
 }
+/* Keyboard focus (chips are tabbable; see onChipsKeydown). :focus-visible
+   keeps the ring off mouse clicks. */
+.fav-chip:focus { outline: none; }
+.fav-chip:focus-visible {
+    outline: 2px solid #0984e3;
+    outline-offset: 1px;
+}
 .fav-chip.dragging { opacity: 0.4; }
 /* Drop indicator while dragging a chip over a sibling. */
 .fav-chip.drop-before { box-shadow: -3px 0 0 0 #0984e3; }
@@ -132,7 +139,8 @@
     opacity: 0;
     transition: opacity 0.12s, background 0.12s, color 0.12s;
 }
-.fav-chip:hover .fav-chip-x { opacity: 1; }
+.fav-chip:hover .fav-chip-x,
+.fav-chip:focus-within .fav-chip-x { opacity: 1; }
 .fav-chip-x:hover { background: rgba(214,48,49,0.14); color: #d63031; }
 
 /* Header ★ toggle (shares .btn-ns sizing from header.css). */

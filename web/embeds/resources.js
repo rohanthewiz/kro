@@ -498,7 +498,7 @@
         var cur = podFilters[slug] || '';
         return '<div class="pod-filter-bar' + (cur ? ' filtering' : '') + '">' +
             '<span class="pod-filter-icon">\u2315</span>' +
-            '<input type="text" class="pod-filter-input" placeholder="Filter pods by name or owner\u2026" ' +
+            '<input type="text" class="pod-filter-input" placeholder="Filter pods by name or owner\u2026  ( / )" ' +
             'value="' + escapeAttr(cur) + '" ' +
             'oninput="onPodFilterInput(\'' + slug + '\', this.value)" ' +
             'onkeydown="if (event.key === \'Escape\') { onPodFilterInput(\'' + slug + '\', \'\'); this.blur(); }">' +
@@ -2180,6 +2180,32 @@
 
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') closeModal();
+    });
+
+    // "/" focuses the pod filter of the tab on screen — the usual
+    // search-focus key in web UIs. Only a bare "/" outside any text field
+    // counts, so it never steals the character from the terminal, a search
+    // box, or the quick switcher; and it stays inert while a modal is open.
+    // The pod listings re-render wholesale and "All Pods" exists in more than
+    // one tab, so the target is looked up at keypress time: the first
+    // .pod-filter-input with a layout box, i.e. in the visible tab and not in
+    // a collapsed section. With none on screen (Pod Watch page, collapsed
+    // section) the key is left alone.
+    document.addEventListener('keydown', function(e) {
+        if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+        var ae = document.activeElement;
+        if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' ||
+                   ae.tagName === 'SELECT' || ae.isContentEditable)) return;
+        var overlay = document.getElementById('resource-modal-overlay');
+        if (overlay && overlay.classList.contains('active')) return;
+        var inputs = document.querySelectorAll('.pod-filter-input');
+        for (var i = 0; i < inputs.length; i++) {
+            if (inputs[i].offsetParent === null) continue; // hidden tab or collapsed section
+            e.preventDefault(); // keep the "/" itself out of the box
+            inputs[i].focus();
+            inputs[i].select(); // typing replaces an old query; arrows keep it
+            return;
+        }
     });
 
     // ===== Helpers =====
