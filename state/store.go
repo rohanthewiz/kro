@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 
@@ -124,10 +125,11 @@ func (s *Store) Namespaces(ctx string) []string {
 func (s *Store) Add(ctx, ns string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, existing := range s.d.Namespaces[ctx] {
-		if existing == ns {
-			return false, nil
-		}
+	// Linear scan rather than slices.BinarySearch: the list is kept sorted
+	// by this method, but state.json may have been hand-edited, and pinned
+	// lists are a handful of entries, so the O(n) check costs nothing.
+	if slices.Contains(s.d.Namespaces[ctx], ns) {
+		return false, nil
 	}
 	s.d.Namespaces[ctx] = append(s.d.Namespaces[ctx], ns)
 	sort.Strings(s.d.Namespaces[ctx])
