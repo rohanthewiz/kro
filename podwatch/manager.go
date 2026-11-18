@@ -374,6 +374,42 @@ func (m *Manager) Stop(ctxName, ns string) error {
 	return nil
 }
 
+// Shutdown stops every watch session and flushes every open capture file. It
+// is called once, as the process exits (after the HTTP server has stopped
+// accepting requests).
+//
+// Captured lines sit in a bufio.Writer that is flushed every flushInterval, so
+// exiting without this loses up to that much of each stream's tail and leaves
+// the files with no closing marker, indistinguishable from a crash. Each
+// stream is finalized exactly as a user Stop would do it, with a marker that
+// names the cause.
+//
+// No events are sent and pending queues are not kicked: there is no one left
+// to tell, and nothing new should start.
+func (m *Manager) Shutdown() {
+	m.mu.Lock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	var streams []*Stream
+	for key, sess := range m.sessions {
+		sessions = append(sessions, sess)
+		for _, st := range sess.streams {
+			streams = append(streams, st)
+		}
+		delete(m.sessions, key)
+	}
+	m.mu.Unlock()
+
+	// Cancel first so the watch loops and log follows stop producing, then
+	// finalize (finalize is a no-op on streams that had already ended).
+	for _, sess := range sessions {
+		sess.cancel()
+	}
+	for _, st := range streams {
+		st.finalize(StateStopped, "stopped (kro shut down)")
+	}
+	m.live.flushAll("kro: shut down")
+}
+
 // Status snapshots every session and stream for the UI.
 func (m *Manager) Status() StatusPayload {
 	m.mu.Lock()

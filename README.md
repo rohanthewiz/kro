@@ -55,6 +55,13 @@ live updates over SSE, no cluster-side install.
   usage and offers manual cleanup.
 - Live updates every ~10s via Server-Sent Events; each browser tab can target a
   different cluster/namespace independently (selection is cookie-keyed).
+  The 13 resource kinds are listed concurrently under a 15s deadline. A
+  snapshot identical to the last one is not re-sent, and one that does arrive
+  only rewrites the tabs it changes: expanded rows stay expanded, a pod filter
+  keeps focus, and a rebuild waits while text is selected or a click is in
+  progress. If the cluster stops answering, the last tables stay on screen
+  under a banner giving the cause. The stream pauses while the window is
+  hidden and resumes when it is shown again.
 - Resource sections organized behind left vertical tabs (Pods, Watch,
   Deployments, Networking, Storage, Sets, Config); sidebar collapses to an icon
   strip, with tab/collapse state persisted per browser.
@@ -123,12 +130,34 @@ Requires Go 1.26+.
 | Variable            | Default                              | Purpose                                  |
 |---------------------|--------------------------------------|------------------------------------------|
 | `KRO_PORT`          | `8222`                               | HTTP listen port                         |
+| `KRO_HOST`          | *(empty: every interface)*           | Interface to listen on. `127.0.0.1` accepts connections from this machine only (KRo.app starts its server this way) |
+| `KRO_ALLOWED_HOSTS` | *(empty)*                            | Extra hostnames accepted in the `Host` header, comma-separated. Needed only when kro is reached through a DNS name; see *Access* below |
 | `KRO_VERBOSE`       | `false`                              | rweb request logging                     |
 | `KUBECONFIG`        | `~/.kube/config`                     | Kubeconfig file (colon-separated merges) |
 | `KRO_STATE_FILE`    | `os.UserConfigDir()/kro/state.json`  | Pinned namespaces + favorites JSON file  |
 | `KRO_WATCH_LOG_DIR` | `os.UserConfigDir()/kro/watch-logs`  | Pod Watch per-pod log files directory    |
 | `KRO_WATCH_LOG_RETENTION_DAYS` | `7`                       | Auto-delete watch logs older than this (`0` disables) |
 | `KRO_POD_READY_TIMEOUT` | `10m`                            | How long Pod Watch waits for a new pod's logs to become available before flagging the stream (Go duration, e.g. `7m30s`); raise it for pods that are slow to start |
+
+### Access
+
+kro has no login: anything that can send it a request acts with your
+kubeconfig's credentials (the terminal runs `kubectl`). Two things limit who
+that is:
+
+- **Bind address.** By default kro listens on every interface, so other
+  machines on your network can reach it. Set `KRO_HOST=127.0.0.1` to keep it
+  to this machine. KRo.app does this for the server it starts.
+- **Request guard.** Requests that a browser makes on behalf of *another*
+  site are refused with 403 (judged by the `Sec-Fetch-Site` and `Origin`
+  headers), so a web page you happen to have open cannot drive kro. The
+  `Host` header must be an IP address, `localhost`, this machine's hostname
+  (also as `<name>.local`), or a name listed in `KRO_ALLOWED_HOSTS`; that
+  stops DNS-rebinding. A link or bookmark to the UI itself still opens from
+  anywhere. `curl` and scripts, which send neither header, are unaffected.
+
+If you open kro as `http://some-name:8222` and get
+`error: host not allowed`, add that name: `KRO_ALLOWED_HOSTS=some-name`.
 
 ## Layout
 
@@ -157,7 +186,7 @@ web/      rweb routes, handlers, SSE feeder, page render, embedded CSS/JS
 | POST   | `/api/favorites/go`        | Switch to `{context, namespace}` in one round trip: pins the namespace, sets both cookies, returns the new namespace list |
 | GET    | `/api/targets`             | Every destination for the quick switcher (no cluster calls) |
 | POST   | `/api/kubeconfig/merge`    | Upload a kubeconfig snippet (multipart `file`), merge into the primary kubeconfig, reload contexts |
-| GET    | `/api/resources`           | One-shot resource tree                                 |
+| GET    | `/api/resources`           | One-shot resource tree (503 `{"error"}` when the cluster is unreachable) |
 | GET    | `/api/describe?kind=&name=`| kubectl-describe text                                  |
 | GET    | `/api/logs?name=`          | Pod logs (all containers, last 500 lines each)         |
 | DELETE | `/api/resources`           | Delete a resource `{kind, name}`                       |
@@ -168,7 +197,7 @@ web/      rweb routes, handlers, SSE feeder, page render, embedded CSS/JS
 | GET    | `/api/watch/export?context=&namespace=&pod=` | Download one stream's log file (attachment) |
 | GET    | `/api/watch/loginfo`       | Watch-log folder path, file count, size, retention     |
 | POST   | `/api/watch/cleanup`       | Delete watch logs older than `{days}` (0 = all; listed streams' files kept) |
-| GET    | `/sse/resources`           | SSE stream of resource snapshots for the cookie scope  |
+| GET    | `/sse/resources`           | SSE stream for the cookie scope: `resources_snapshot` (the tree, when it changed), `resources_tick` (checked, unchanged), `resources_error` (`{"error"}`; the cluster could not be listed) |
 | GET    | `/sse/logs?name=`          | SSE live log stream for a pod                          |
 | GET    | `/sse/metrics?name=`       | SSE per-pod CPU/memory samples from metrics.k8s.io     |
 | GET    | `/sse/term?cmd=...`        | Run `kubectl <cmd>` against active ctx/ns; SSE stdout/stderr/done |

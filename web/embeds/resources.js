@@ -159,10 +159,7 @@
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.error) { alert('Remove failed: ' + data.error); return; }
-                loadNamespaces().then(function() {
-                    refreshResources();
-                    initResourcesStream();
-                });
+                loadNamespaces().then(reloadResources);
             }).catch(function(err) { alert('Remove failed: ' + err.message); });
     }
 
@@ -175,35 +172,32 @@
             currentCtx = data.context || currentCtx;
             currentNs = data.namespace || currentNs;
             updateTermTarget();
-            refreshResources();
-            initResourcesStream();
+            reloadResources();
             if (window.kroFavoritesSelectionChanged) window.kroFavoritesSelectionChanged();
         });
     }
 
+    // Switching cluster from the dropdown goes through the same one-request
+    // path as a favorite chip (kroSwitchTarget with no namespace), which lands
+    // on the namespace that cluster last showed, else its first pinned one,
+    // else its kubeconfig default.
+    //
+    // The previous flow here was three requests (select context -> reload
+    // namespaces -> select namespace) and left the kro_ns cookie holding the
+    // *old* cluster's namespace: /api/select only writes that cookie for a
+    // non-empty namespace. Unless a namespace of the same name happened to be
+    // pinned in the new cluster, the NS dropdown went blank and the tables
+    // showed the old namespace name looked up in the new cluster.
     function onContextChange() {
-        var ctx = document.getElementById('ctx-select').value;
-        currentCtx = ctx;
-        // Clear ns cookie by sending empty namespace AFTER setting context, then reload ns list.
-        fetch('/api/select', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ context: ctx, namespace: '' })
-        }).then(function(r) { return r.json(); }).then(function() {
-            loadNamespaces().then(function() {
-                // Persist whatever default the new context surfaced.
-                var ns = currentNs || document.getElementById('ns-select').value;
-                if (ns) {
-                    fetch('/api/select', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ namespace: ns })
-                    });
-                }
-                updateTermTarget();
-                refreshResources();
-                initResourcesStream();
-            });
+        var sel = document.getElementById('ctx-select');
+        var previous = currentCtx;
+        window.kroSwitchTarget(sel.value, '').then(function(data) {
+            // A refused switch (unknown context) leaves the selection where
+            // it was; put the dropdown back so it does not lie about it.
+            if (!data) sel.value = previous;
+        }).catch(function(err) {
+            sel.value = previous;
+            alert('Switch failed: ' + err.message);
         });
     }
 
@@ -244,8 +238,7 @@
             }
 
             updateTermTarget();
-            refreshResources();
-            initResourcesStream();
+            reloadResources();
             if (window.watchPageSelectionChanged) window.watchPageSelectionChanged();
             if (window.kroFavoritesSelectionChanged) window.kroFavoritesSelectionChanged();
             return data;
@@ -345,14 +338,58 @@
     }
 
     // ===== Resource Display =====
-    function applyTree(tree) {
+    //
+    // Render state. A snapshot arrives every ~10s, and each one used to replace
+    // every tab's markup outright, which reset whatever the user was doing:
+    // expanded rows collapsed, a focused filter lost focus, a text selection
+    // vanished, a click landing mid-rebuild was lost. The pieces below make a
+    // background snapshot invisible unless something on screen changed:
+    //
+    //   snapshot ──► applyTree ──► stale scope? ── yes ──► drop
+    //                    │
+    //                    ├─ user mid-click / selecting text? ── yes ──► pendingTree
+    //                    │                                   (rendered on release)
+    //                    └─ renderTree ──► rebuildTables ──► per tab:
+    //                                         HTML same as tabHtmlCache? ──► skip
+    //                                         else replace, restore filter focus
+    //
+    // Expanded rows live in expandedRows (keyed by kind and name, so they
+    // survive both a re-render and a reordering) rather than in DOM classes.
+    var lastTree = null;      // tree currently on screen for this selection
+    var pendingTree = null;   // newest snapshot held back by an interaction
+    var tabHtmlCache = {};    // tab id -> HTML last written into its panel
+    var expandedRows = {};    // row key -> true for expanded parent rows
+
+    // force skips the interaction hold: an explicit Refresh click should show
+    // its result even if some text happens to be selected.
+    function applyTree(tree, force) {
         var anchor = document.getElementById('tab-sections-workloads');
         if (!anchor) return;
         if (tree.error) {
-            renderErrorAcrossTabs(tree.error);
-            updateSummary(0, 0, 0, 0);
+            showResourcesError(tree.error);
             return;
         }
+        // A response for a selection the user has since left (a slow list
+        // finishing after a namespace switch) must not paint over the new
+        // one. Only enforced when both sides are known; an empty side means
+        // "cannot tell", and dropping then could strand the page on Loading.
+        if (tree.context && tree.namespace && currentCtx && currentNs &&
+            (tree.context !== currentCtx || tree.namespace !== currentNs)) {
+            return;
+        }
+        if (!force && interactionActive()) {
+            pendingTree = tree; // newest wins; older held snapshots are obsolete
+            updateStatusTitle(); // the dot's tooltip says an update is waiting
+            return;
+        }
+        renderTree(tree);
+    }
+
+    function renderTree(tree) {
+        pendingTree = null;
+        lastTree = tree;
+        updateStatusTitle(); // clears any "update is waiting" note
+        clearResourcesBanner();
         rebuildTables(tree);
         var totalPods = countPods(tree);
         updateSummary(
@@ -363,26 +400,133 @@
         );
     }
 
+    // ----- Interaction hold -----
+    // True while replacing the tables would step on the user: a mouse button
+    // is down inside a resource panel (a rebuild between mousedown and mouseup
+    // swaps the element under the pointer, so the click never fires), or text
+    // is selected there (a rebuild destroys the selection before it can be
+    // copied). Scoped to the .tab-sections containers, so a selection in the
+    // terminal or a Pod Watch frame never stalls the tables.
+    var tabMouseDownAt = 0; // ms timestamp of a mousedown inside a panel; 0 = up
+    var MOUSE_HOLD_MAX_MS = 15000;
+
+    function inTabSections(node) {
+        while (node && node.nodeType !== 1) node = node.parentNode;
+        return !!(node && node.closest && node.closest('.tab-sections'));
+    }
+
+    function interactionActive() {
+        // The age cap is a failsafe: a mouseup can be missed (released
+        // outside the window on some platforms), and a stuck flag would
+        // otherwise freeze the tables until reload.
+        if (tabMouseDownAt && Date.now() - tabMouseDownAt < MOUSE_HOLD_MAX_MS) return true;
+        var sel = window.getSelection ? window.getSelection() : null;
+        if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+        return inTabSections(sel.anchorNode);
+    }
+
+    function flushPendingTree() {
+        if (pendingTree && !interactionActive()) renderTree(pendingTree);
+    }
+
+    document.addEventListener('mousedown', function(e) {
+        if (inTabSections(e.target)) tabMouseDownAt = Date.now();
+    }, true);
+    window.addEventListener('mouseup', function() {
+        if (!tabMouseDownAt) return;
+        tabMouseDownAt = 0;
+        // Deferred so the click this mouseup completes runs against the
+        // elements it was aimed at, before any held snapshot replaces them.
+        setTimeout(flushPendingTree, 0);
+    }, true);
+    window.addEventListener('blur', function() { tabMouseDownAt = 0; });
+    document.addEventListener('selectionchange', flushPendingTree);
+
+    // ----- Banner / errors -----
+    // A failed refresh keeps the last good tables on screen under a banner
+    // rather than replacing them with an error: for a blip, slightly stale
+    // rows are more useful than none. Only when nothing has been rendered for
+    // this selection does the error take the tables' place.
+    function showResourcesError(msg) {
+        if (!lastTree) {
+            renderErrorAcrossTabs(msg);
+            updateSummary('-', '-', '-', '-');
+            return;
+        }
+        var el = document.getElementById('resources-banner');
+        if (!el) return;
+        el.textContent = '⚠ ' + msg + ' — showing the last data received (' +
+            formatClock(lastGoodAt) + '); retrying.';
+        el.style.display = '';
+    }
+
+    function clearResourcesBanner() {
+        var el = document.getElementById('resources-banner');
+        if (el) { el.style.display = 'none'; el.textContent = ''; }
+    }
+
+    function formatClock(ms) {
+        if (!ms) return 'unknown time';
+        return new Date(ms).toLocaleTimeString();
+    }
+
     function renderErrorAcrossTabs(msg) {
         var safe = escapeHtml(msg);
         for (var i = 0; i < TAB_CONFIG.length; i++) {
             var el = document.getElementById('tab-sections-' + TAB_CONFIG[i].id);
             if (el) el.innerHTML = '<div class="empty-state">' + safe + '</div>';
         }
+        tabHtmlCache = {}; // panels no longer hold what the cache says
     }
 
-    window.refreshResources = function() {
+    function showLoadingAcrossTabs() {
         for (var i = 0; i < TAB_CONFIG.length; i++) {
             var el = document.getElementById('tab-sections-' + TAB_CONFIG[i].id);
             if (el) el.innerHTML = '<div class="loading">Loading resources</div>';
         }
+        tabHtmlCache = {};
+    }
+
+    // Forget everything rendered for the previous selection. Called when the
+    // cluster or namespace changes: the old rows, their expand state and any
+    // held snapshot all belong to somewhere the user has left.
+    function resetResourceView() {
+        lastTree = null;
+        pendingTree = null;
+        expandedRows = {};
+        lastGoodAt = 0;
+        clearResourcesBanner();
+        showLoadingAcrossTabs();
+    }
+
+    // The selection changed: clear the view, fetch once, (re)open the stream.
+    // The one-shot fetch is kept alongside the stream on purpose. It reports
+    // an HTTP error with its cause straight away, where a stream that cannot
+    // connect only shows as an amber dot.
+    function reloadResources() {
+        resetResourceView();
+        window.refreshResources();
+        initResourcesStream();
+    }
+
+    // Manual refresh (the header button, and after a delete). Tables already
+    // on screen stay put while the request is out, instead of flashing back
+    // to "Loading"; the button dims so the click visibly registered.
+    window.refreshResources = function() {
+        if (!lastTree) showLoadingAcrossTabs();
+        var btn = document.getElementById('btn-refresh');
+        if (btn) btn.classList.add('busy');
 
         fetch('/api/resources')
         .then(function(r) { return r.json(); })
-        .then(applyTree)
+        .then(function(tree) {
+            if (!tree.error) noteResourcesFresh();
+            applyTree(tree, true);
+        })
         .catch(function(err) {
-            renderErrorAcrossTabs('Failed to fetch resources: ' + err.message);
-        });
+            showResourcesError('Failed to fetch resources: ' + err.message);
+        })
+        .then(function() { if (btn) btn.classList.remove('busy'); });
     };
 
     function countPods(tree) {
@@ -494,12 +638,15 @@
     var POD_FILTER_SLUGS = ['all-pods', 'deployment-pods'];
     var podFilters = {};
 
+    // The bar's markup deliberately carries no filter state (no value="",
+    // no "filtering" class): applyPodFilter() sets both on the live elements
+    // after every rebuild. Baking the query into the HTML would make each
+    // keystroke change the tab's markup, defeating the unchanged-tab check in
+    // rebuildTables and forcing a rebuild on the next snapshot.
     function podFilterBar(slug) {
-        var cur = podFilters[slug] || '';
-        return '<div class="pod-filter-bar' + (cur ? ' filtering' : '') + '">' +
+        return '<div class="pod-filter-bar">' +
             '<span class="pod-filter-icon">\u2315</span>' +
             '<input type="text" class="pod-filter-input" placeholder="Filter pods by name or owner\u2026  ( / )" ' +
-            'value="' + escapeAttr(cur) + '" ' +
             'oninput="onPodFilterInput(\'' + slug + '\', this.value)" ' +
             'onkeydown="if (event.key === \'Escape\') { onPodFilterInput(\'' + slug + '\', \'\'); this.blur(); }">' +
             '<button type="button" class="pod-filter-clear" title="Clear filter (Esc)" ' +
@@ -681,12 +828,44 @@
                 var builder = SECTION_BUILDERS[tab.sections[j]];
                 if (builder) html += builder(ctx);
             }
+            // Most snapshots change nothing a given tab shows. Comparing the
+            // generated markup with what was last written is a cheap exact
+            // diff, and skipping the write leaves that panel's DOM (hover,
+            // focus, scroll) completely untouched.
+            if (tabHtmlCache[tab.id] === html) continue;
+            var focus = captureFilterFocus(anchor);
             anchor.innerHTML = html;
+            tabHtmlCache[tab.id] = html;
+            restoreFilterFocus(anchor, focus);
         }
 
-        // Sections were just replaced wholesale; restore any active pod
-        // filters so a background refresh doesn't drop the user's query.
+        // Rebuilt sections come back with empty filter inputs and every row
+        // shown; reapply the active queries (also re-syncs untouched tabs,
+        // which costs little at these row counts).
         applyPodFilter();
+    }
+
+    // If the pod filter inside anchor has focus, remember which one and where
+    // the caret is, so a rebuild in the middle of typing can hand both back
+    // to the replacement input. Returns null when focus is elsewhere.
+    function captureFilterFocus(anchor) {
+        var ae = document.activeElement;
+        if (!ae || !ae.classList || !ae.classList.contains('pod-filter-input') || !anchor.contains(ae)) return null;
+        var sec = ae.closest('[data-section]');
+        if (!sec) return null;
+        return { slug: sec.getAttribute('data-section'), start: ae.selectionStart, end: ae.selectionEnd };
+    }
+
+    function restoreFilterFocus(anchor, focus) {
+        if (!focus) return;
+        var input = anchor.querySelector('[data-section="' + focus.slug + '"] .pod-filter-input');
+        if (!input) return; // the section emptied out; nothing to refocus
+        // Set the text before focusing: applyPodFilter() leaves the focused
+        // input alone (so it never fights the caret), which means nothing
+        // else would fill this fresh, empty element.
+        input.value = q0(focus.slug);
+        input.focus();
+        try { input.setSelectionRange(focus.start, focus.end); } catch (_) { /* caret stays at the end */ }
     }
 
     // ===== Section collapse/expand =====
@@ -748,13 +927,14 @@
         var body;
         if (items.length > 0) {
             body = '<div class="table-wrapper"><table>' + tableHead() + '<tbody>';
-            items.forEach(function(item, i) {
-                var parentId = idPrefix + '-' + i;
+            items.forEach(function(item) {
+                var parentId = rowKey(idPrefix, item);
                 var hasChildren = item.children && item.children.length > 0;
-                body += parentRow(parentId, item, hasChildren);
+                var open = hasChildren && !!expandedRows[parentId];
+                body += parentRow(parentId, item, hasChildren, undefined, open);
                 if (hasChildren) {
                     item.children.forEach(function(pod) {
-                        body += childRow(parentId, pod, 'child-row');
+                        body += childRow(parentId, pod, 'child-row' + (open ? ' visible' : ''));
                     });
                 }
             });
@@ -769,18 +949,22 @@
         var body;
         if (deploys.length > 0) {
             body = '<div class="table-wrapper"><table>' + tableHead() + '<tbody>';
-            deploys.forEach(function(deploy, i) {
-                var parentId = 'deploy-' + i;
+            deploys.forEach(function(deploy) {
+                var parentId = rowKey('deploy', deploy);
                 var hasChildren = deploy.children && deploy.children.length > 0;
-                body += parentRow(parentId, deploy, hasChildren);
+                var open = hasChildren && !!expandedRows[parentId];
+                body += parentRow(parentId, deploy, hasChildren, undefined, open);
                 if (hasChildren) {
-                    deploy.children.forEach(function(rs, j) {
-                        var rsId = parentId + '-rs-' + j;
+                    deploy.children.forEach(function(rs) {
+                        // Nested under the parent's key, so collapsing the
+                        // Deployment can clear its ReplicaSets by prefix.
+                        var rsId = rowKey(parentId, rs);
                         var rsHasChildren = rs.children && rs.children.length > 0;
-                        body += childRowExpandable(parentId, rsId, rs, rsHasChildren);
+                        var rsOpen = open && rsHasChildren && !!expandedRows[rsId];
+                        body += childRowExpandable(parentId, rsId, rs, rsHasChildren, open, rsOpen);
                         if (rsHasChildren) {
                             rs.children.forEach(function(pod) {
-                                body += childRow(rsId, pod, 'grandchild-row');
+                                body += childRow(rsId, pod, 'grandchild-row' + (rsOpen ? ' visible' : ''));
                             });
                         }
                     });
@@ -851,14 +1035,26 @@
         return btns;
     }
 
+    // rowKey names an expandable row by what it is rather than where it sits:
+    // "<scope>/<Kind>:<name>". Rows used to be identified by list index
+    // ("deploy-0"), so the expanded state could not survive a re-render in
+    // which the list order changed, and it lived only in DOM classes that a
+    // rebuild discards. Kubernetes names cannot contain quotes, slashes or
+    // colons, so the key is safe inside the inline onclick below and
+    // unambiguous as a prefix.
+    function rowKey(scope, res) {
+        return scope + '/' + (res.kind || '') + ':' + (res.name || '');
+    }
+
     // owner is optional: pass a controller ref ('rs/foo', 'job/bar', or '' for
     // an orphan) to render the Owner column that tableHead(true) declares.
     // Leave it undefined for the hierarchical tables, which have no such column.
-    function parentRow(parentId, res, hasChildren, owner) {
+    // open renders the row already expanded (see expandedRows).
+    function parentRow(parentId, res, hasChildren, owner, open) {
         var arrow = hasChildren
-            ? '<span class="expand-arrow" id="arrow-' + parentId + '">▶</span>'
+            ? '<span class="expand-arrow' + (open ? ' open' : '') + '">▶</span>'
             : '<span class="expand-arrow"></span>';
-        var onclick = hasChildren ? ' onclick="toggleChildren(\'' + parentId + '\')"' : '';
+        var onclick = hasChildren ? ' onclick="toggleChildren(\'' + escapeAttr(parentId) + '\')"' : '';
         var cls = hasChildren ? 'resource-row' : '';
         var ownerCell = owner === undefined ? '' :
             '<td class="resource-owner' + (owner ? '' : ' orphan') + '">' +
@@ -879,8 +1075,9 @@
             '</tr>';
     }
 
+    // rowClass carries ' visible' when the parent is expanded.
     function childRow(parentId, res, rowClass) {
-        return '<tr class="' + rowClass + '" data-parent="' + parentId + '">' +
+        return '<tr class="' + rowClass + '" data-parent="' + escapeAttr(parentId) + '">' +
             '<td></td>' +
             '<td class="resource-name">' + escapeHtml(res.name) + '</td>' +
             '<td>' + kindBadge(res.kind) + '</td>' +
@@ -895,13 +1092,15 @@
             '</tr>';
     }
 
-    function childRowExpandable(parentId, rsId, res, hasChildren) {
+    // visible: the owning Deployment is expanded, so this row shows.
+    // open: this ReplicaSet is itself expanded, showing its pods.
+    function childRowExpandable(parentId, rsId, res, hasChildren, visible, open) {
         var arrow = hasChildren
-            ? '<span class="expand-arrow" id="arrow-' + rsId + '">▶</span>'
+            ? '<span class="expand-arrow' + (open ? ' open' : '') + '">▶</span>'
             : '';
-        var onclick = hasChildren ? ' onclick="event.stopPropagation(); toggleChildren(\'' + rsId + '\')"' : '';
-        var cls = 'child-row' + (hasChildren ? ' resource-row' : '');
-        return '<tr class="' + cls + '" data-parent="' + parentId + '"' + onclick + '>' +
+        var onclick = hasChildren ? ' onclick="event.stopPropagation(); toggleChildren(\'' + escapeAttr(rsId) + '\')"' : '';
+        var cls = 'child-row' + (hasChildren ? ' resource-row' : '') + (visible ? ' visible' : '');
+        return '<tr class="' + cls + '" data-parent="' + escapeAttr(parentId) + '"' + onclick + '>' +
             '<td>' + arrow + '</td>' +
             '<td class="resource-name">' + escapeHtml(res.name) + '</td>' +
             '<td>' + kindBadge(res.kind) + '</td>' +
@@ -924,36 +1123,26 @@
     }
 
     // ===== Expand / Collapse =====
+    // Flip one row's entry in expandedRows and re-render from the tree already
+    // on screen. Rendering is the only code that decides which rows show, so a
+    // click and a background snapshot can never disagree about it. (The
+    // earlier version toggled DOM classes directly, which the next rebuild
+    // threw away.) The re-render is local: no request is made, and only the
+    // tab whose markup changed is rewritten.
     window.toggleChildren = function(parentId) {
-        var rows = document.querySelectorAll('[data-parent="' + parentId + '"]');
-        var arrow = document.getElementById('arrow-' + parentId);
-        var isOpen = arrow && arrow.classList.contains('open');
-        rows.forEach(function(row) {
-            if (isOpen) {
-                row.classList.remove('visible');
-                var subId = row.getAttribute('data-parent');
-                if (subId !== parentId) return;
-                var rowId = getRowId(row);
-                if (rowId) collapseDescendants(rowId);
-            } else {
-                row.classList.add('visible');
+        if (expandedRows[parentId]) {
+            delete expandedRows[parentId];
+            // Collapsing a row also collapses what is nested under it, so
+            // reopening a Deployment starts with its ReplicaSets closed.
+            var prefix = parentId + '/';
+            for (var k in expandedRows) {
+                if (k.indexOf(prefix) === 0) delete expandedRows[k];
             }
-        });
-        if (arrow) arrow.classList.toggle('open');
+        } else {
+            expandedRows[parentId] = true;
+        }
+        if (lastTree) rebuildTables(lastTree);
     };
-
-    function getRowId(row) {
-        var arrowEl = row.querySelector('.expand-arrow');
-        if (arrowEl && arrowEl.id) return arrowEl.id.replace('arrow-', '');
-        return null;
-    }
-
-    function collapseDescendants(parentId) {
-        var rows = document.querySelectorAll('[data-parent="' + parentId + '"]');
-        rows.forEach(function(row) { row.classList.remove('visible'); });
-        var arrow = document.getElementById('arrow-' + parentId);
-        if (arrow) arrow.classList.remove('open');
-    }
 
     // ===== Delete =====
     window.deleteResource = function(kind, name) {
@@ -2235,63 +2424,127 @@
     function escapeAttr(str) { return escapeHtml(str).replace(/'/g, '&#39;'); }
 
     // ===== SSE =====
+    // /sse/resources event types (see web/sse.go):
+    //   resources_snapshot  the full tree, sent when it differs from the last
+    //   resources_tick      "checked, nothing changed" (no payload to parse)
+    //   resources_error     {"error": "..."}: the cluster could not be listed
+    // Every one of them proves the stream is alive and feeds the watchdog.
     var HEARTBEAT_TIMEOUT_MS = 60000;
     var resourcesSource = null;
     var resourcesHeartbeatTimer = null;
     var resourcesStatus = null;
+    var lastGoodAt = 0; // ms timestamp of the last successful check of the cluster
 
     function setStatus(state) {
         if (!resourcesStatus) return;
         resourcesStatus.className = 'log-status ' + state;
+        updateStatusTitle(state);
+    }
+
+    // The dot's tooltip says what the color means and how fresh the page is.
+    function updateStatusTitle(state) {
+        if (!resourcesStatus) return;
+        state = state || (resourcesStatus.className.replace('log-status', '').trim());
+        var label = { connected: 'Live', reconnecting: 'Reconnecting…',
+                      disconnected: 'Not connected', paused: 'Paused while the window is hidden' }[state] || state;
+        resourcesStatus.title = label + (lastGoodAt ? ' — last checked ' + formatClock(lastGoodAt) : '') +
+            (pendingTree ? '. An update is waiting; it is applied when the text selection is released.' : '');
+    }
+
+    function noteResourcesFresh() {
+        lastGoodAt = Date.now();
+        updateStatusTitle();
     }
 
     function resetHeartbeat() {
         clearTimeout(resourcesHeartbeatTimer);
         resourcesHeartbeatTimer = setTimeout(function() {
-            if (resourcesSource) {
-                resourcesSource.close();
-                resourcesSource = null;
-            }
+            closeResourcesStream();
             setStatus('reconnecting');
             setTimeout(initResourcesStream, 1000);
         }, HEARTBEAT_TIMEOUT_MS);
     }
 
-    function initResourcesStream() {
+    function closeResourcesStream() {
+        clearTimeout(resourcesHeartbeatTimer);
         if (resourcesSource) {
             resourcesSource.close();
             resourcesSource = null;
         }
-        resourcesSource = new EventSource('/sse/resources');
+    }
 
-        resourcesSource.onmessage = function(e) {
-            resetHeartbeat();
-            try {
-                // SetupSSE without Hub.Broadcast wrapping: data is the SSEvent.Data field directly.
-                var tree = JSON.parse(e.data);
-                applyTree(tree);
-            } catch (err) {
-                // heartbeat keepalive or unknown — ignore
-            }
-        };
+    function initResourcesStream() {
+        closeResourcesStream();
+        // While the window is hidden the stream stays closed (see the
+        // visibility handling below); becoming visible reopens it.
+        if (document.hidden) { setStatus('paused'); return; }
 
-        // The server sets event: resources_snapshot via SetupSSE's eventTypeOption.
-        resourcesSource.addEventListener('resources_snapshot', function(e) {
+        var source = new EventSource('/sse/resources');
+        resourcesSource = source;
+
+        source.addEventListener('resources_snapshot', function(e) {
+            if (source !== resourcesSource) return; // a superseded stream's straggler
             resetHeartbeat();
+            setStatus('connected');
             try {
                 var tree = JSON.parse(e.data);
+                noteResourcesFresh();
                 applyTree(tree);
-            } catch (err) { /* ignore */ }
+            } catch (err) { /* malformed frame: wait for the next */ }
+        });
+        source.addEventListener('resources_tick', function() {
+            if (source !== resourcesSource) return;
+            resetHeartbeat();
+            setStatus('connected');
+            noteResourcesFresh();
+            // The cluster answered and nothing changed, so whatever is on
+            // screen is current again: drop a banner left by an earlier error.
+            if (lastTree) clearResourcesBanner();
+        });
+        source.addEventListener('resources_error', function(e) {
+            if (source !== resourcesSource) return;
+            resetHeartbeat(); // kro is alive; it is the cluster that is not answering
+            var msg = 'cluster unavailable';
+            try { msg = JSON.parse(e.data).error || msg; } catch (err) { /* keep default */ }
+            showResourcesError(msg);
         });
 
-        resourcesSource.onopen = function() {
+        source.onopen = function() {
+            if (source !== resourcesSource) return;
             setStatus('connected');
             resetHeartbeat();
         };
-        resourcesSource.onerror = function() {
+        source.onerror = function() {
+            if (source !== resourcesSource) return;
             setStatus('reconnecting');
         };
     }
+
+    // ----- Pause while hidden -----
+    // A hidden window (minimized, another Space, KRo.app in the background for
+    // days) has nobody to show snapshots to, but the server would keep listing
+    // 13 resource kinds every 10s on its behalf. Closing the stream stops
+    // that: the server's producer ends with the connection. A short grace
+    // period keeps a quick Cmd+Tab away and back from tearing it down.
+    // Only this stream is paused. Logs, Pod Watch and terminal streams are
+    // capturing output and must keep running unattended.
+    var HIDDEN_GRACE_MS = 20000;
+    var hiddenTimer = null;
+
+    document.addEventListener('visibilitychange', function() {
+        clearTimeout(hiddenTimer);
+        if (document.hidden) {
+            hiddenTimer = setTimeout(function() {
+                if (!document.hidden) return;
+                closeResourcesStream();
+                setStatus('paused');
+            }, HIDDEN_GRACE_MS);
+            return;
+        }
+        // Visible again. If the stream was closed, reopen it; its first event
+        // is a full snapshot, so the tables catch up without a manual refresh.
+        if (!resourcesSource) initResourcesStream();
+    });
 
     // ===== Terminal =====
     // A small kubectl-only terminal that sits above the resource sections.
@@ -2937,10 +3190,23 @@
             termClose();
         });
         termSource.onerror = function() {
-            // EventSource will retry; only treat as failure if we never saw 'done'.
-            // If the process is still running on the server, retries are fine —
-            // but if the server already closed (done sent), retries are noise.
+            // Never let EventSource retry here. /sse/term starts kubectl when
+            // the request arrives, so a reconnect to the same URL does not
+            // resume the output: it runs the command a second time. For
+            // `rollout restart`, `delete`, `scale` or `apply`, that is a
+            // second mutation the user never asked for. Close the source,
+            // which also cancels the process server-side if it is still
+            // running, and say what happened; re-running is the user's call.
             if (!termRunning) { termClose(); return; }
+            termAppendOutput(block, 'stderr',
+                '(connection to kro lost; the command was not re-run. Its outcome is unknown, check before repeating it.)');
+            flushTermBlockOutput(block);
+            termFinalize(block, -1, false);
+            // There is no exit code to report; say so instead of "exit -1".
+            if (block && block.exitEl) block.exitEl.textContent = 'connection lost';
+            termActiveBlock = null;
+            termSetRunning(false);
+            termClose();
         };
     };
 
@@ -3321,8 +3587,7 @@
                     return loadNamespaces();
                 }).then(function() {
                     updateTermTarget();
-                    refreshResources();
-                    initResourcesStream();
+                    reloadResources();
                 });
             })
             .catch(function(err) { alert('Merge failed: ' + err.message); })
@@ -3363,8 +3628,7 @@
             return loadNamespaces();
         }).then(function() {
             updateTermTarget();
-            refreshResources();
-            initResourcesStream();
+            reloadResources();
         });
     });
 })();

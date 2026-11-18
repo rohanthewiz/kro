@@ -123,6 +123,8 @@
 .log-status.connected    { background: #00b894; }
 .log-status.disconnected { background: #d63031; }
 .log-status.reconnecting { background: #fdcb6e; }
+/* Resources stream closed on purpose while the window is hidden. */
+.log-status.paused       { background: #b2bec3; }
 
 /* Nav link — primary blue */
 .nav-link {

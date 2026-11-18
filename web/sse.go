@@ -2,8 +2,11 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"kro/kube"
@@ -21,15 +24,41 @@ const snapshotInterval = 10 * time.Second
 
 const metricsPollInterval = 10 * time.Second
 
+// snapshotErrBackoffMax caps how far produceSnapshots backs off while the
+// cluster keeps failing. It has to stay under the page's 60s heartbeat
+// watchdog minus kube.ListTimeout (15s): a failing attempt takes up to the
+// list timeout, and the page must still hear something (the error event)
+// within its watchdog window, or it would reconnect and reset the backoff.
+const snapshotErrBackoffMax = 30 * time.Second
+
+// SSE event types on /sse/resources. The page (resources.js) listens for each
+// by name.
+const (
+	evResourcesSnapshot = "resources_snapshot" // data: the ResourceTree JSON
+	evResourcesTick     = "resources_tick"     // data: unix seconds; "checked, nothing changed"
+	evResourcesError    = "resources_error"    // data: {"error": "..."}; the list failed
+)
+
 // SSE streams resource-tree snapshots for the cookie-selected (context,
-// namespace) of the connecting client. Each connection has its own goroutine
-// and selection — multiple tabs can target different clusters/namespaces.
+// namespace) of the connecting client. Each connection has its own producer
+// goroutine and selection — multiple tabs can target different
+// clusters/namespaces. rweb.SSEHub broadcasts identical payloads to all
+// clients, which doesn't fit per-tab targeting, so SetupSSE is wired directly
+// with a per-client channel.
 //
-// rweb.SSEHub broadcasts identical payloads to all clients, which doesn't fit
-// per-tab targeting, so we wire SetupSSE directly with a per-client channel.
-// When the client disconnects, rweb closes the response writer; the producer
-// goroutine exits on the next send via the stop channel sent from a deferred
-// close in the request handler. (rweb's SetupSSE blocks until disconnect.)
+// Producer lifetime: rweb's SetupSSE only records the channel and returns; the
+// pump that writes events runs afterward, in the response phase. So the
+// producer cannot be stopped "when SetupSSE returns" — an earlier version did
+// exactly that, which cancelled it before its first list finished and left the
+// page with one snapshot per connection. It is tied to the request context
+// instead, which rweb keeps alive for the whole event stream and cancels when
+// the stream ends (client gone, or server shutdown):
+//
+//	handler ── c.Request().Context() ──┐
+//	   │                               ▼
+//	   └─ SetupSSE(evCh) ──► returns   produceSnapshots(ctx) ──► evCh ──► pump ──► client
+//	                                   ▲                                    │
+//	                                   └──────── ctx cancelled ◄── stream ends
 func (h *handlers) SSE(svr *rweb.Server) rweb.Handler {
 	return func(c rweb.Context) error {
 		sel, err := h.resolve(c)
@@ -41,48 +70,130 @@ func (h *handlers) SSE(svr *rweb.Server) rweb.Handler {
 			return writeTextErr(c, 502, err.Error())
 		}
 
+		// The request context must be obtained inside the handler, but is
+		// safe to use from the producer goroutine after the handler returns.
+		reqCtx := c.Request().Context()
+
+		// Small buffer: the producer emits one event per interval, so this
+		// only absorbs a briefly slow client. A client that stops reading
+		// blocks the producer in emit (no further cluster calls are made on
+		// its behalf) until it catches up or disconnects.
 		evCh := make(chan any, 4)
-		stop := make(chan struct{})
+		interval := h.snapshotEvery
+		if interval <= 0 {
+			interval = snapshotInterval
+		}
+		go produceSnapshots(reqCtx, client, sel, evCh, interval)
 
-		go produceSnapshots(client, sel, evCh, stop)
-
-		// SetupSSE blocks until the client disconnects.
-		serveErr := svr.SetupSSE(c, evCh, "resources_snapshot")
-		close(stop)
-		return serveErr
+		return svr.SetupSSE(c, evCh, evResourcesSnapshot)
 	}
 }
 
-func produceSnapshots(client *kubernetes.Clientset, sel kube.Selection, out chan<- any, stop <-chan struct{}) {
-	send := func() {
-		tree, err := kube.ListResources(client, sel.Namespace)
-		if err != nil {
-			logger.WarnF("sse list failed for %s/%s: %v", sel.Context, sel.Namespace, err)
-			return
+// produceSnapshots lists the selection's resources every interval and emits
+// the result on out until ctx is cancelled.
+//
+// Three outcomes per round:
+//   - the tree changed (or this is the first round): a full snapshot event;
+//   - the tree is byte-identical to the last one sent: a tiny tick event, so
+//     the page can skip parsing and re-rendering but still knows the stream
+//     is alive (its heartbeat watchdog would otherwise reconnect);
+//   - the list failed as a whole: an error event, with the wait before the
+//     next attempt doubling up to snapshotErrBackoffMax so an unreachable
+//     cluster is not dialed 13 times every interval indefinitely.
+//
+// "Changed" is decided on the marshalled JSON, which includes the formatted
+// age strings; a quiet namespace therefore still produces a snapshot whenever
+// an age rolls over (every second for a pod under a minute old, every minute
+// under an hour, and so on). That is what keeps the Age column moving.
+//
+// Log lines are written on transitions only (first failure, a different
+// failure, recovery, a changed warning set). At one round every ten seconds
+// per open tab, logging every round would bury kro.log.
+func produceSnapshots(ctx context.Context, client kubernetes.Interface, sel kube.Selection, out chan<- any, interval time.Duration) {
+	var (
+		lastSum      [sha256.Size]byte // digest of the last snapshot payload sent
+		haveLast     bool              // false until a snapshot is sent, and again after an error
+		lastErrMsg   string            // last failure logged ("" while healthy)
+		lastWarnings string            // last per-kind warning set logged
+	)
+
+	// emit delivers one event unless the client has gone; false means stop.
+	emit := func(evType, data string) bool {
+		select {
+		case out <- rweb.SSEvent{Type: evType, Data: data}:
+			return true
+		case <-ctx.Done():
+			return false
 		}
+	}
+
+	// round runs one list and emits its outcome. ok=false means the client
+	// has gone; failed reports a cluster-level failure (drives the backoff).
+	round := func() (ok, failed bool) {
+		tree, err := kube.ListResources(ctx, client, sel.Namespace)
+		if ctx.Err() != nil {
+			return false, false // cancelled mid-list: nothing worth reporting
+		}
+		if err != nil {
+			msg := err.Error()
+			if msg != lastErrMsg {
+				logger.WarnF("resources stream %s/%s: %s", sel.Context, sel.Namespace, msg)
+				lastErrMsg = msg
+			}
+			// Forget the last digest: when the cluster comes back, the page
+			// must get a full snapshot to clear its error banner, even if
+			// the tree is identical to the one from before the outage.
+			haveLast = false
+			payload, _ := json.Marshal(map[string]string{"error": msg})
+			return emit(evResourcesError, string(payload)), true
+		}
+		if lastErrMsg != "" {
+			logger.InfoF("resources stream %s/%s: recovered", sel.Context, sel.Namespace)
+			lastErrMsg = ""
+		}
+		if w := strings.Join(tree.Warnings, "; "); w != lastWarnings {
+			if w != "" {
+				logger.WarnF("resources stream %s/%s: %s", sel.Context, sel.Namespace, w)
+			}
+			lastWarnings = w
+		}
+
 		tree.Context = sel.Context
 		tree.Namespace = sel.Namespace
 		payload, err := json.Marshal(tree)
 		if err != nil {
 			logger.LogErr(serr.Wrap(err, "sse marshal"))
-			return
+			return true, false
 		}
-		select {
-		case out <- rweb.SSEvent{Type: "resources_snapshot", Data: string(payload)}:
-		case <-stop:
+		if sum := sha256.Sum256(payload); !haveLast || sum != lastSum {
+			lastSum, haveLast = sum, true
+			return emit(evResourcesSnapshot, string(payload)), false
 		}
+		return emit(evResourcesTick, strconv.FormatInt(time.Now().Unix(), 10)), false
 	}
 
-	send()
-	t := time.NewTicker(snapshotInterval)
-	defer t.Stop()
+	// A timer rather than a ticker: the wait is measured from the end of one
+	// round to the start of the next, so a slow list never has the next one
+	// queued up behind it, and the error backoff is just a longer wait.
+	wait := interval
+	timer := time.NewTimer(0) // first round immediately
+	defer timer.Stop()
 	for {
 		select {
-		case <-stop:
+		case <-ctx.Done():
 			return
-		case <-t.C:
-			send()
+		case <-timer.C:
 		}
+		ok, failed := round()
+		if !ok {
+			return
+		}
+		if failed {
+			wait = min(wait*2, max(interval, snapshotErrBackoffMax))
+		} else {
+			wait = interval
+		}
+		timer.Reset(wait)
 	}
 }
 

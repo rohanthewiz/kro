@@ -770,3 +770,62 @@ func TestFileWriteAndMarkers(t *testing.T) {
 		t.Error("file handles should be nil after finalize")
 	}
 }
+
+// Shutdown must leave nothing in the write buffers: the captured tail and a
+// closing marker reach the file for Pod Watch streams, and open Logs-modal
+// captures are flushed too. Streams that had already ended are left alone.
+func TestShutdownFlushesEverything(t *testing.T) {
+	m, sess := newTestSession(t)
+
+	path := logFilePath(m.logDir, "c1", "n1", "busy", time.Now())
+	f, w, err := openLogFile(path)
+	if err != nil {
+		t.Fatalf("openLogFile: %v", err)
+	}
+	busy := &Stream{Pod: "busy", state: StateRunning, subs: map[chan string]string{}, filePath: path, file: f, w: w}
+	busy.writeLine("buffered tail line") // sits in the bufio.Writer until a flush
+	done := &Stream{Pod: "done", state: StateCompleted}
+	sess.streams["busy"], sess.streams["done"] = busy, done
+
+	live, err := m.Live().Acquire("cap-shutdown1", "c1", "n1", "viewed")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	live.WriteLine("modal line")
+
+	if raw, _ := os.ReadFile(path); strings.Contains(string(raw), "buffered tail line") {
+		t.Fatal("precondition: the line should still be buffered, not on disk")
+	}
+
+	m.Shutdown()
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read stream log: %v", err)
+	}
+	if got := string(raw); !strings.Contains(got, "buffered tail line\n") || !strings.Contains(got, "--- stopped (kro shut down) ") {
+		t.Errorf("stream log after shutdown = %q", got)
+	}
+	if st := busy.status(); st.State != string(StateStopped) {
+		t.Errorf("busy stream state = %s, want stopped", st.State)
+	}
+	if st := done.status(); st.State != string(StateCompleted) {
+		t.Errorf("already-ended stream was touched: state = %s", st.State)
+	}
+	if sess.ctx.Err() == nil {
+		t.Error("session context should be cancelled")
+	}
+	if n := len(m.Status().Sessions); n != 0 {
+		t.Errorf("sessions after shutdown = %d, want 0", n)
+	}
+
+	liveRaw, err := os.ReadFile(live.Path)
+	if err != nil {
+		t.Fatalf("read live capture: %v", err)
+	}
+	if got := string(liveRaw); !strings.Contains(got, "modal line\n") || !strings.Contains(got, "--- kro: shut down ") {
+		t.Errorf("live capture after shutdown = %q", got)
+	}
+
+	m.Shutdown() // idempotent: a second call finds nothing to do
+}

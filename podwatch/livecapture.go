@@ -248,6 +248,29 @@ func (c *LiveCapture) closeFileLocked() {
 	c.file, c.w = nil, nil
 }
 
+// flushAll writes marker to every capture that still has a file open and
+// flushes it to disk. Used at shutdown, where the open Logs modals' SSE
+// connections are about to be cut without their usual Release. The files are
+// left open: a producer may still be unwinding, and the process is exiting
+// anyway.
+func (lc *LiveCaptures) flushAll(marker string) {
+	lc.mu.Lock()
+	caps := make([]*LiveCapture, 0, len(lc.caps))
+	for _, c := range lc.caps {
+		caps = append(caps, c)
+	}
+	lc.mu.Unlock()
+
+	for _, c := range caps {
+		c.mu.Lock()
+		if c.w != nil {
+			c.writeMarkerLocked(marker)
+			c.w.Flush()
+		}
+		c.mu.Unlock()
+	}
+}
+
 // ExportPath flushes buffered lines and returns the capture's file path for a
 // download. Only paths the manager built itself are ever returned.
 func (lc *LiveCaptures) ExportPath(id string) (string, error) {

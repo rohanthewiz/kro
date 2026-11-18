@@ -54,6 +54,10 @@ func renderPage(buildNumber, buildMessage, buildHash string) string {
 					summaryCard(b, "services", "Services", "summary-services"),
 				),
 
+				// Shown by resources.js when a refresh fails while tables are
+				// already on screen: the rows stay, under this notice.
+				b.Div("id", "resources-banner", "class", "resources-banner", "role", "status", "style", "display:none").R(),
+
 				tabLayout(b),
 			),
 			b.Script().T(resourcesJS),

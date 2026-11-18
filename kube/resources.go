@@ -2,15 +2,20 @@ package kube
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 
-	"github.com/rohanthewiz/logger"
 	appsV1 "k8s.io/api/apps/v1"
 	batchV1 "k8s.io/api/batch/v1"
 	coreV1 "k8s.io/api/core/v1"
 	netV1 "k8s.io/api/networking/v1"
 	storageV1 "k8s.io/api/storage/v1"
+	apiErrors "k8s.io/apimachinery/pkg/api/errors"
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -53,109 +58,178 @@ type ResourceTree struct {
 	Warnings               []string      `json:"warnings,omitempty"`
 }
 
-// ListResources fetches the resource tree for the given namespace.
-// Resource types that return permission errors are silently skipped (with a
-// user-visible warning) rather than failing the whole request.
-func ListResources(client *kubernetes.Clientset, ns string) (ResourceTree, error) {
-	bgCtx := context.Background()
-	listOpts := metaV1.ListOptions{}
-	var warnings []string
+// ListTimeout bounds one whole ListResources call. The 13 lists run
+// concurrently, so this is also the longest any single one may take. It is a
+// little longer than the page's 10s refresh cadence on purpose: a slow but
+// working cluster still gets its answer, while an unreachable one (VPN down,
+// expired credentials hanging in an exec plugin) fails in seconds rather than
+// stacking one dial timeout per kind.
+const ListTimeout = 15 * time.Second
 
-	jobs, err := client.BatchV1().Jobs(ns).List(bgCtx, listOpts)
-	if err != nil {
-		logger.WarnF("skipping jobs: %v", err)
-		warnings = append(warnings, "Could not list Jobs — check RBAC permissions")
+// ErrClusterUnavailable marks a ListResources failure that concerns the
+// cluster as a whole (unreachable, credentials rejected, no answer in time)
+// rather than one resource kind. Callers show it as a single banner instead
+// of a page of per-kind warnings over empty tables.
+var ErrClusterUnavailable = errors.New("cluster unavailable")
+
+// ListResources fetches the resource tree for the given namespace.
+//
+// The 13 kinds are listed concurrently under one ListTimeout deadline:
+//
+//	          ┌─ Jobs ──────────┐
+//	ctx+15s ──┼─ Deployments ───┼──► wait ──► classify errors ──► build tree
+//	          ├─ … 11 more … ───┤
+//	          └─ StorageClasses ┘
+//
+// Sequentially, the wall time was the sum of the calls (and against an
+// unreachable cluster, 13 dial timeouts back to back). Concurrently it is the
+// slowest single call, capped by the deadline. Each goroutine writes only its
+// own result variable and its own slot of errs, so no locking is needed.
+//
+// Error policy:
+//   - A kind that fails while others succeed is skipped with a user-visible
+//     warning. Only a real 403 is reported as an RBAC gap; anything else
+//     carries its actual cause.
+//   - If every kind failed and none of the failures was a 403, the problem is
+//     the cluster, not permissions: the call returns ErrClusterUnavailable
+//     wrapping a summary of the cause. (A namespace-scoped user who is
+//     forbidden everything still gets the per-kind RBAC warnings.)
+//
+// ctx cancellation (the browser went away) aborts in-flight lists.
+//
+// Nothing is logged here: this runs every few seconds per open page, so the
+// callers log (on transitions only) instead. The warnings and the returned
+// error carry everything a caller needs.
+func ListResources(ctx context.Context, client kubernetes.Interface, ns string) (ResourceTree, error) {
+	ctx, cancel := context.WithTimeout(ctx, ListTimeout)
+	defer cancel()
+	listOpts := metaV1.ListOptions{}
+
+	var (
+		jobs           *batchV1.JobList
+		deployments    *appsV1.DeploymentList
+		replicaSets    *appsV1.ReplicaSetList
+		statefulSets   *appsV1.StatefulSetList
+		daemonSets     *appsV1.DaemonSetList
+		pods           *coreV1.PodList
+		services       *coreV1.ServiceList
+		ingresses      *netV1.IngressList
+		configMaps     *coreV1.ConfigMapList
+		secrets        *coreV1.SecretList
+		pvs            *coreV1.PersistentVolumeList
+		pvcs           *coreV1.PersistentVolumeClaimList
+		storageClasses *storageV1.StorageClassList
+	)
+
+	// The order here is the order warnings are reported in, so it is fixed
+	// (and matches the order the kinds were listed in before this ran
+	// concurrently). kind is the plural the page's warning router keys on
+	// ("Could not list <kind>").
+	calls := []struct {
+		kind string
+		run  func() error
+	}{
+		{"Jobs", func() (err error) { jobs, err = client.BatchV1().Jobs(ns).List(ctx, listOpts); return }},
+		{"Deployments", func() (err error) { deployments, err = client.AppsV1().Deployments(ns).List(ctx, listOpts); return }},
+		{"ReplicaSets", func() (err error) { replicaSets, err = client.AppsV1().ReplicaSets(ns).List(ctx, listOpts); return }},
+		{"StatefulSets", func() (err error) { statefulSets, err = client.AppsV1().StatefulSets(ns).List(ctx, listOpts); return }},
+		{"DaemonSets", func() (err error) { daemonSets, err = client.AppsV1().DaemonSets(ns).List(ctx, listOpts); return }},
+		{"Pods", func() (err error) { pods, err = client.CoreV1().Pods(ns).List(ctx, listOpts); return }},
+		{"Services", func() (err error) { services, err = client.CoreV1().Services(ns).List(ctx, listOpts); return }},
+		{"Ingresses", func() (err error) { ingresses, err = client.NetworkingV1().Ingresses(ns).List(ctx, listOpts); return }},
+		{"ConfigMaps", func() (err error) { configMaps, err = client.CoreV1().ConfigMaps(ns).List(ctx, listOpts); return }},
+		{"Secrets", func() (err error) { secrets, err = client.CoreV1().Secrets(ns).List(ctx, listOpts); return }},
+		// PersistentVolumes and StorageClasses are cluster-scoped — listed
+		// cluster-wide, not by namespace.
+		{"PersistentVolumes", func() (err error) { pvs, err = client.CoreV1().PersistentVolumes().List(ctx, listOpts); return }},
+		{"PersistentVolumeClaims", func() (err error) { pvcs, err = client.CoreV1().PersistentVolumeClaims(ns).List(ctx, listOpts); return }},
+		{"StorageClasses", func() (err error) {
+			storageClasses, err = client.StorageV1().StorageClasses().List(ctx, listOpts)
+			return
+		}},
+	}
+
+	errs := make([]error, len(calls))
+	var wg sync.WaitGroup
+	for i, call := range calls {
+		wg.Go(func() { errs[i] = call.run() })
+	}
+	wg.Wait()
+
+	// The caller gave up (browser disconnected, server shutting down): the
+	// errors below are all "context canceled" and describe nothing about the
+	// cluster, so report the cancellation itself and let the caller drop it.
+	if cause := ctx.Err(); cause != nil && !errors.Is(cause, context.DeadlineExceeded) {
+		return ResourceTree{}, cause
+	}
+
+	var warnings []string
+	failed, forbidden := 0, 0
+	var firstErr error
+	for i, err := range errs {
+		if err == nil {
+			continue
+		}
+		failed++
+		kind := calls[i].kind
+		if apiErrors.IsForbidden(err) {
+			forbidden++
+			warnings = append(warnings, "Could not list "+kind+" — check RBAC permissions")
+			continue
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		warnings = append(warnings, "Could not list "+kind+" — "+describeListError(err))
+	}
+	if failed == len(calls) && forbidden == 0 {
+		return ResourceTree{}, fmt.Errorf("%w: %s", ErrClusterUnavailable, describeListError(firstErr))
+	}
+
+	// A failed call may leave its list nil; substitute empty lists so the
+	// tree-building below needs no nil checks.
+	if jobs == nil {
 		jobs = &batchV1.JobList{}
 	}
-
-	deployments, err := client.AppsV1().Deployments(ns).List(bgCtx, listOpts)
-	if err != nil {
-		logger.WarnF("skipping deployments: %v", err)
-		warnings = append(warnings, "Could not list Deployments — check RBAC permissions")
+	if deployments == nil {
 		deployments = &appsV1.DeploymentList{}
 	}
-
-	replicaSets, err := client.AppsV1().ReplicaSets(ns).List(bgCtx, listOpts)
-	if err != nil {
-		logger.WarnF("skipping replicasets: %v", err)
-		warnings = append(warnings, "Could not list ReplicaSets — check RBAC permissions")
+	if replicaSets == nil {
 		replicaSets = &appsV1.ReplicaSetList{}
 	}
-
-	statefulSets, err := client.AppsV1().StatefulSets(ns).List(bgCtx, listOpts)
-	if err != nil {
-		logger.WarnF("skipping statefulsets: %v", err)
-		warnings = append(warnings, "Could not list StatefulSets — check RBAC permissions")
+	if statefulSets == nil {
 		statefulSets = &appsV1.StatefulSetList{}
 	}
-
-	daemonSets, err := client.AppsV1().DaemonSets(ns).List(bgCtx, listOpts)
-	if err != nil {
-		logger.WarnF("skipping daemonsets: %v", err)
-		warnings = append(warnings, "Could not list DaemonSets — check RBAC permissions")
+	if daemonSets == nil {
 		daemonSets = &appsV1.DaemonSetList{}
 	}
-
-	pods, err := client.CoreV1().Pods(ns).List(bgCtx, listOpts)
-	if err != nil {
-		logger.WarnF("skipping pods: %v", err)
-		warnings = append(warnings, "Could not list Pods — check RBAC permissions")
+	if pods == nil {
 		pods = &coreV1.PodList{}
 	}
-
-	services, err := client.CoreV1().Services(ns).List(bgCtx, listOpts)
-	if err != nil {
-		logger.WarnF("skipping services: %v", err)
-		warnings = append(warnings, "Could not list Services — check RBAC permissions")
+	if services == nil {
 		services = &coreV1.ServiceList{}
 	}
-
-	ingresses, err := client.NetworkingV1().Ingresses(ns).List(bgCtx, listOpts)
-	if err != nil {
-		logger.WarnF("skipping ingresses: %v", err)
-		warnings = append(warnings, "Could not list Ingresses — check RBAC permissions")
+	if ingresses == nil {
 		ingresses = &netV1.IngressList{}
 	}
-
-	configMaps, err := client.CoreV1().ConfigMaps(ns).List(bgCtx, listOpts)
-	if err != nil {
-		logger.WarnF("skipping configmaps: %v", err)
-		warnings = append(warnings, "Could not list ConfigMaps — check RBAC permissions")
+	if configMaps == nil {
 		configMaps = &coreV1.ConfigMapList{}
 	}
-
-	secrets, err := client.CoreV1().Secrets(ns).List(bgCtx, listOpts)
-	if err != nil {
-		logger.WarnF("skipping secrets: %v", err)
-		warnings = append(warnings, "Could not list Secrets — check RBAC permissions")
+	if secrets == nil {
 		secrets = &coreV1.SecretList{}
 	}
-
-	// PersistentVolumes are cluster-scoped — listed cluster-wide, not by namespace.
-	pvs, err := client.CoreV1().PersistentVolumes().List(bgCtx, listOpts)
-	if err != nil {
-		logger.WarnF("skipping persistentvolumes: %v", err)
-		warnings = append(warnings, "Could not list PersistentVolumes — check RBAC permissions")
+	if pvs == nil {
 		pvs = &coreV1.PersistentVolumeList{}
 	}
-
-	pvcs, err := client.CoreV1().PersistentVolumeClaims(ns).List(bgCtx, listOpts)
-	if err != nil {
-		logger.WarnF("skipping persistentvolumeclaims: %v", err)
-		warnings = append(warnings, "Could not list PersistentVolumeClaims — check RBAC permissions")
+	if pvcs == nil {
 		pvcs = &coreV1.PersistentVolumeClaimList{}
 	}
-
-	// StorageClasses are cluster-scoped.
-	storageClasses, err := client.StorageV1().StorageClasses().List(bgCtx, listOpts)
-	if err != nil {
-		logger.WarnF("skipping storageclasses: %v", err)
-		warnings = append(warnings, "Could not list StorageClasses — check RBAC permissions")
+	if storageClasses == nil {
 		storageClasses = &storageV1.StorageClassList{}
 	}
 
 	type indexedRS struct {
-		rs       appsV1.ReplicaSet
+		rs       *appsV1.ReplicaSet
 		children []K8sResource
 	}
 
@@ -165,13 +239,19 @@ func ListResources(client *kubernetes.Clientset, ns string) (ResourceTree, error
 		jobsByUID[j.UID] = i
 	}
 
+	// allRS keeps the API's list order; rsByUID is only the pod → ReplicaSet
+	// lookup. Everything that *emits* ReplicaSets walks allRS, never the map:
+	// Go randomizes map iteration, which used to reshuffle a Deployment's
+	// ReplicaSet rows (and the orphan ReplicaSets) on every snapshot.
+	allRS := make([]*indexedRS, len(replicaSets.Items))
 	rsByUID := make(map[types.UID]*indexedRS, len(replicaSets.Items))
-	for _, rs := range replicaSets.Items {
-		rsByUID[rs.UID] = &indexedRS{rs: rs}
+	for i := range replicaSets.Items {
+		irs := &indexedRS{rs: &replicaSets.Items[i]}
+		allRS[i] = irs
+		rsByUID[irs.rs.UID] = irs
 	}
 
 	deployByUID := make(map[types.UID]int, len(deployments.Items))
-	deployChildren := make(map[int][]K8sResource, len(deployments.Items))
 	for i, d := range deployments.Items {
 		deployByUID[d.UID] = i
 	}
@@ -220,19 +300,20 @@ func ListResources(client *kubernetes.Clientset, ns string) (ResourceTree, error
 		}
 	}
 
-	orphanRS := make(map[types.UID]*indexedRS)
-	for uid, irs := range rsByUID {
+	// Attach each ReplicaSet to its Deployment; the rest are orphans.
+	deployRS := make(map[int][]*indexedRS, len(deployments.Items))
+	var orphanRS []*indexedRS
+	for _, irs := range allRS {
 		assigned := false
 		for _, ref := range irs.rs.OwnerReferences {
 			if dIdx, ok := deployByUID[ref.UID]; ok {
-				rsRes := replicaSetToResource(irs.rs, irs.children)
-				deployChildren[dIdx] = append(deployChildren[dIdx], rsRes)
+				deployRS[dIdx] = append(deployRS[dIdx], irs)
 				assigned = true
 				break
 			}
 		}
 		if !assigned {
-			orphanRS[uid] = irs
+			orphanRS = append(orphanRS, irs)
 		}
 	}
 
@@ -242,11 +323,34 @@ func ListResources(client *kubernetes.Clientset, ns string) (ResourceTree, error
 		tree.Jobs = append(tree.Jobs, jobToResource(j, jobChildren[i]))
 	}
 	for i, d := range deployments.Items {
-		tree.Deployments = append(tree.Deployments, deploymentToResource(d, deployChildren[i]))
+		// A Deployment keeps its old ReplicaSets around (scaled to 0) for
+		// rollback, typically ten of them. Put the ones that still want
+		// pods first and order the rest newest first, so the ReplicaSet
+		// that matters is the top row instead of somewhere in the history.
+		owned := deployRS[i]
+		sort.SliceStable(owned, func(a, b int) bool {
+			aLive, bLive := rsDesired(owned[a].rs) > 0, rsDesired(owned[b].rs) > 0
+			if aLive != bLive {
+				return aLive
+			}
+			at, bt := owned[a].rs.CreationTimestamp.Time, owned[b].rs.CreationTimestamp.Time
+			if !at.Equal(bt) {
+				return at.After(bt)
+			}
+			return owned[a].rs.Name < owned[b].rs.Name
+		})
+		children := make([]K8sResource, 0, len(owned))
+		for _, irs := range owned {
+			children = append(children, replicaSetToResource(*irs.rs, irs.children))
+		}
+		if len(children) == 0 {
+			children = nil // keep "children" out of the JSON, as before
+		}
+		tree.Deployments = append(tree.Deployments, deploymentToResource(d, children))
 	}
 	for _, irs := range orphanRS {
 		// Surface orphan ReplicaSets so users can still see them.
-		tree.Deployments = append(tree.Deployments, replicaSetToResource(irs.rs, irs.children))
+		tree.Deployments = append(tree.Deployments, replicaSetToResource(*irs.rs, irs.children))
 	}
 	for i, s := range statefulSets.Items {
 		tree.StatefulSets = append(tree.StatefulSets, statefulSetToResource(s, stsChildren[i]))
@@ -279,6 +383,39 @@ func ListResources(client *kubernetes.Clientset, ns string) (ResourceTree, error
 	tree.OrphanPods = orphanPods
 	tree.Warnings = warnings
 	return tree, nil
+}
+
+// rsDesired is the ReplicaSet's desired replica count (nil spec → 0).
+func rsDesired(rs *appsV1.ReplicaSet) int32 {
+	if rs.Spec.Replicas == nil {
+		return 0
+	}
+	return *rs.Spec.Replicas
+}
+
+// listErrorMaxLen caps a cause shown in the page. client-go errors embed the
+// full request URL and can run to several hundred characters.
+const listErrorMaxLen = 240
+
+// describeListError turns a client-go list failure into one short line for
+// the page. The common whole-cluster causes get plain wording; anything else
+// is the error text itself, truncated.
+func describeListError(err error) string {
+	if err == nil {
+		return "unknown error"
+	}
+	var netErr net.Error
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		return fmt.Sprintf("no response from the cluster within %s", ListTimeout)
+	case apiErrors.IsUnauthorized(err):
+		return "the cluster rejected the credentials (401); re-authenticate and retry"
+	}
+	msg := strings.Join(strings.Fields(err.Error()), " ") // collapse newlines from exec-plugin output
+	if len(msg) > listErrorMaxLen {
+		msg = msg[:listErrorMaxLen] + "…"
+	}
+	return msg
 }
 
 // ----- per-kind row builders -----

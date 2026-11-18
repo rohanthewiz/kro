@@ -23,9 +23,12 @@ import (
 // we fall back to runtime/debug VCS info so dev runs (`go run .`) still show a hash.
 func NewServer(cfg config.Config, reg *kube.ClientRegistry, store *state.Store, mgr *podwatch.Manager, buildNumber, buildMessage, buildHash string) *rweb.Server {
 	svr := rweb.NewServer(rweb.ServerOptions{
-		Address: ":" + cfg.Port,
+		Address: cfg.ListenAddr(),
 		Verbose: cfg.Verbose,
 	})
+	// First in the chain: a refused request must not reach any handler.
+	// See guard.go for what it refuses and why.
+	svr.Use(requestGuard(newHostAllowlist(cfg.AllowedHosts)))
 
 	resolvedBuild := resolveBuildNumber(buildNumber)
 	h := &handlers{

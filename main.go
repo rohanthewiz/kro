@@ -85,9 +85,20 @@ func main() {
 
 	srv := web.NewServer(cfg, reg, store, mgr, BuildNumber, buildMessage(), BuildHash)
 
-	logger.InfoF("kro listening on :%s (build=%s)", cfg.Port, BuildNumber)
-	if err := srv.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "fatal: server:", err)
+	logger.InfoF("kro listening on %s (build=%s)", cfg.ListenAddr(), BuildNumber)
+	if cfg.Host == "" {
+		// Not an error: reaching kro from another device is a supported
+		// setup. But it should be a choice the operator can see.
+		logger.WarnF("listening on every network interface with no login; set KRO_HOST=127.0.0.1 to accept connections from this machine only")
+	}
+	// Run returns nil once SIGINT/SIGTERM arrives (KRo.app sends SIGTERM on
+	// quit). Flush and close the capture files before the process goes away,
+	// whichever way Run ended.
+	runErr := srv.Run()
+	mgr.Shutdown()
+	if runErr != nil {
+		fmt.Fprintln(os.Stderr, "fatal: server:", runErr)
 		os.Exit(1)
 	}
+	logger.InfoF("kro stopped")
 }

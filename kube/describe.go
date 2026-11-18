@@ -18,86 +18,87 @@ import (
 
 // Describe returns a kubectl-describe-style text rendering for the given resource,
 // including its events. Returns an error if the resource is not found or the kind
-// is unsupported.
-func Describe(client *kubernetes.Clientset, ns, kind, name string) (string, error) {
-	bgCtx := context.Background()
+// is unsupported. ctx bounds the Get and the events List; callers pass a
+// deadline (see RequestTimeout) so an unresponsive cluster cannot hang the
+// request indefinitely.
+func Describe(ctx context.Context, client *kubernetes.Clientset, ns, kind, name string) (string, error) {
 	var buf bytes.Buffer
 
 	switch kind {
 	case "Pod":
-		pod, err := client.CoreV1().Pods(ns).Get(bgCtx, name, metaV1.GetOptions{})
+		pod, err := client.CoreV1().Pods(ns).Get(ctx, name, metaV1.GetOptions{})
 		if err != nil {
 			return "", serr.Wrap(err)
 		}
 		describePod(&buf, pod)
 	case "Job":
-		job, err := client.BatchV1().Jobs(ns).Get(bgCtx, name, metaV1.GetOptions{})
+		job, err := client.BatchV1().Jobs(ns).Get(ctx, name, metaV1.GetOptions{})
 		if err != nil {
 			return "", serr.Wrap(err)
 		}
 		describeJob(&buf, job)
 	case "Deployment":
-		d, err := client.AppsV1().Deployments(ns).Get(bgCtx, name, metaV1.GetOptions{})
+		d, err := client.AppsV1().Deployments(ns).Get(ctx, name, metaV1.GetOptions{})
 		if err != nil {
 			return "", serr.Wrap(err)
 		}
 		describeDeployment(&buf, d)
 	case "ReplicaSet":
-		rs, err := client.AppsV1().ReplicaSets(ns).Get(bgCtx, name, metaV1.GetOptions{})
+		rs, err := client.AppsV1().ReplicaSets(ns).Get(ctx, name, metaV1.GetOptions{})
 		if err != nil {
 			return "", serr.Wrap(err)
 		}
 		describeReplicaSet(&buf, rs)
 	case "StatefulSet":
-		s, err := client.AppsV1().StatefulSets(ns).Get(bgCtx, name, metaV1.GetOptions{})
+		s, err := client.AppsV1().StatefulSets(ns).Get(ctx, name, metaV1.GetOptions{})
 		if err != nil {
 			return "", serr.Wrap(err)
 		}
 		describeStatefulSet(&buf, s)
 	case "DaemonSet":
-		d, err := client.AppsV1().DaemonSets(ns).Get(bgCtx, name, metaV1.GetOptions{})
+		d, err := client.AppsV1().DaemonSets(ns).Get(ctx, name, metaV1.GetOptions{})
 		if err != nil {
 			return "", serr.Wrap(err)
 		}
 		describeDaemonSet(&buf, d)
 	case "Service":
-		s, err := client.CoreV1().Services(ns).Get(bgCtx, name, metaV1.GetOptions{})
+		s, err := client.CoreV1().Services(ns).Get(ctx, name, metaV1.GetOptions{})
 		if err != nil {
 			return "", serr.Wrap(err)
 		}
 		describeService(&buf, s)
 	case "Ingress":
-		in, err := client.NetworkingV1().Ingresses(ns).Get(bgCtx, name, metaV1.GetOptions{})
+		in, err := client.NetworkingV1().Ingresses(ns).Get(ctx, name, metaV1.GetOptions{})
 		if err != nil {
 			return "", serr.Wrap(err)
 		}
 		describeIngress(&buf, in)
 	case "ConfigMap":
-		cm, err := client.CoreV1().ConfigMaps(ns).Get(bgCtx, name, metaV1.GetOptions{})
+		cm, err := client.CoreV1().ConfigMaps(ns).Get(ctx, name, metaV1.GetOptions{})
 		if err != nil {
 			return "", serr.Wrap(err)
 		}
 		describeConfigMap(&buf, cm)
 	case "Secret":
-		s, err := client.CoreV1().Secrets(ns).Get(bgCtx, name, metaV1.GetOptions{})
+		s, err := client.CoreV1().Secrets(ns).Get(ctx, name, metaV1.GetOptions{})
 		if err != nil {
 			return "", serr.Wrap(err)
 		}
 		describeSecret(&buf, s)
 	case "PersistentVolume":
-		pv, err := client.CoreV1().PersistentVolumes().Get(bgCtx, name, metaV1.GetOptions{})
+		pv, err := client.CoreV1().PersistentVolumes().Get(ctx, name, metaV1.GetOptions{})
 		if err != nil {
 			return "", serr.Wrap(err)
 		}
 		describePersistentVolume(&buf, pv)
 	case "PersistentVolumeClaim":
-		pvc, err := client.CoreV1().PersistentVolumeClaims(ns).Get(bgCtx, name, metaV1.GetOptions{})
+		pvc, err := client.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metaV1.GetOptions{})
 		if err != nil {
 			return "", serr.Wrap(err)
 		}
 		describePersistentVolumeClaim(&buf, pvc)
 	case "StorageClass":
-		sc, err := client.StorageV1().StorageClasses().Get(bgCtx, name, metaV1.GetOptions{})
+		sc, err := client.StorageV1().StorageClasses().Get(ctx, name, metaV1.GetOptions{})
 		if err != nil {
 			return "", serr.Wrap(err)
 		}
@@ -106,7 +107,7 @@ func Describe(client *kubernetes.Clientset, ns, kind, name string) (string, erro
 		return "", serr.New("unsupported kind: " + kind)
 	}
 
-	writeEvents(&buf, client, bgCtx, ns, kind, name)
+	writeEvents(&buf, client, ctx, ns, kind, name)
 	return buf.String(), nil
 }
 

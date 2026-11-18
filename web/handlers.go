@@ -2,11 +2,14 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"kro/kube"
 	"kro/podwatch"
@@ -15,6 +18,7 @@ import (
 	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/rweb"
 	"github.com/rohanthewiz/serr"
+	apiErrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 type handlers struct {
@@ -24,6 +28,10 @@ type handlers struct {
 	buildNumber  string
 	buildMessage string
 	buildHash    string
+
+	// snapshotEvery overrides snapshotInterval for the resources stream.
+	// Zero means the default; tests set it to milliseconds.
+	snapshotEvery time.Duration
 }
 
 // resolve picks (context, namespace) using the store as the pinned-list source
@@ -213,10 +221,18 @@ func (h *handlers) Resources(c rweb.Context) error {
 		return writeJSONErr(c, http.StatusBadGateway, err)
 	}
 
-	tree, err := kube.ListResources(client, sel.Namespace)
+	// Bound to the request: a client that navigates away (or switches
+	// namespace mid-load) cancels the lists still in flight.
+	tree, err := kube.ListResources(c.Request().Context(), client, sel.Namespace)
 	if err != nil {
-		logger.LogErr(serr.Wrap(err, "failed to list resources"))
-		return writeJSONErr(c, http.StatusInternalServerError, err)
+		// A whole-cluster failure is the cluster's fault, not kro's: 503
+		// with the cause, which the page shows as a banner.
+		status := http.StatusInternalServerError
+		if errors.Is(err, kube.ErrClusterUnavailable) {
+			status = http.StatusServiceUnavailable
+		}
+		logger.WarnF("list resources %s/%s: %v", sel.Context, sel.Namespace, err)
+		return writeJSONErr(c, status, err)
 	}
 	tree.Context = sel.Context
 	tree.Namespace = sel.Namespace
@@ -240,9 +256,11 @@ func (h *handlers) Describe(c rweb.Context) error {
 		return writeTextErr(c, http.StatusBadGateway, err.Error())
 	}
 
-	out, err := kube.Describe(client, sel.Namespace, kind, name)
+	ctx, cancel := context.WithTimeout(c.Request().Context(), kube.RequestTimeout)
+	defer cancel()
+	out, err := kube.Describe(ctx, client, sel.Namespace, kind, name)
 	if err != nil {
-		return writeTextErr(c, http.StatusNotFound, err.Error())
+		return writeTextErr(c, clusterErrStatus(err), err.Error())
 	}
 	c.Response().SetHeader("Content-Type", "text/plain; charset=utf-8")
 	return c.WriteString(out)
@@ -264,9 +282,11 @@ func (h *handlers) Logs(c rweb.Context) error {
 		return writeTextErr(c, http.StatusBadGateway, err.Error())
 	}
 
-	out, err := kube.PodLogs(client, sel.Namespace, name)
+	ctx, cancel := context.WithTimeout(c.Request().Context(), kube.RequestTimeout)
+	defer cancel()
+	out, err := kube.PodLogs(ctx, client, sel.Namespace, name)
 	if err != nil {
-		return writeTextErr(c, http.StatusNotFound, err.Error())
+		return writeTextErr(c, clusterErrStatus(err), err.Error())
 	}
 	c.Response().SetHeader("Content-Type", "text/plain; charset=utf-8")
 	return c.WriteString(out)
@@ -294,8 +314,13 @@ func (h *handlers) Delete(c rweb.Context) error {
 		return writeJSONErr(c, http.StatusBadGateway, err)
 	}
 
-	if err := kube.Delete(client, sel.Namespace, body.Kind, body.Name); err != nil {
-		return writeJSONErr(c, http.StatusInternalServerError, err)
+	// Deliberately not tied to the request context: once the user has
+	// confirmed a delete it should run to completion even if the page is
+	// closed or reloaded mid-request. The deadline alone bounds it.
+	ctx, cancel := context.WithTimeout(context.Background(), kube.RequestTimeout)
+	defer cancel()
+	if err := kube.Delete(ctx, client, sel.Namespace, body.Kind, body.Name); err != nil {
+		return writeJSONErr(c, clusterErrStatus(err), err)
 	}
 	logger.InfoF("deleted %s/%s in %s/%s", body.Kind, body.Name, sel.Context, sel.Namespace)
 	return c.WriteJSON(map[string]string{"status": "deleted"})
@@ -347,6 +372,25 @@ func (h *handlers) MergeKubeconfig(c rweb.Context) error {
 }
 
 // ----- helpers -----
+
+// clusterErrStatus maps a failed one-shot cluster call to an HTTP status.
+// These used to answer 404 (or 500) for everything, so "the cluster did not
+// respond" was indistinguishable from "no such pod". The Kubernetes API's own
+// status code is passed through when there is one (404, 403, 409, …); a
+// deadline is a 504; anything else — connection refused, an exec credential
+// plugin failing — is a 502.
+func clusterErrStatus(err error) int {
+	var apiStatus apiErrors.APIStatus
+	if errors.As(err, &apiStatus) {
+		if code := int(apiStatus.Status().Code); code >= 400 && code < 600 {
+			return code
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return http.StatusGatewayTimeout
+	}
+	return http.StatusBadGateway
+}
 
 func writeJSONErr(c rweb.Context, status int, err error) error {
 	c.SetStatus(status)

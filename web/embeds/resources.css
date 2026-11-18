@@ -735,6 +735,29 @@ tbody td {
     margin-bottom: 6px;
 }
 
+/* Stale-data notice: a refresh failed, the tables below are the last good
+   snapshot. Sits above the tab layout so it shows on every tab. */
+.resources-banner {
+    background: #ffe3e0;
+    color: #8a1c12;
+    border: 1px solid #f5b5ae;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    margin-bottom: 12px;
+}
+body.dark .resources-banner {
+    background: #3a1a1a;
+    color: #ffb4a8;
+    border-color: #6b2a25;
+}
+
+/* Header Refresh button while its request is out. */
+.btn-reconnect.busy {
+    opacity: 0.55;
+    pointer-events: none;
+}
+
 /* Modal overlay */
 .modal-overlay {
     display: none;

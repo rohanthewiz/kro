@@ -396,7 +396,7 @@ import AppKit
 import Foundation
 import WebKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKDownloadDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKDownloadDelegate, WKUIDelegate {
     private var window: NSWindow!
     private var webView: WKWebView!
     private var serverProcess: Process?
@@ -486,6 +486,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         config.websiteDataStore = .default()
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
+        // Required for alert()/confirm()/prompt() and file inputs to do
+        // anything at all; see "JavaScript dialogs and file pickers" below.
+        webView.uiDelegate = self
 
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
@@ -516,6 +519,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         process.executableURL = kroURL
         var env = ProcessInfo.processInfo.environment
         env["KRO_PORT"] = port
+        // The app only ever talks to its server over loopback, so the server
+        // it starts listens there and nowhere else. kro has no login, and its
+        // default is every interface, which would offer kubectl with this
+        // user's credentials to the rest of the network. An explicit KRO_HOST
+        // in the environment still wins. (A kro too old to know KRO_HOST
+        // ignores it.)
+        if env["KRO_HOST"] == nil {
+            env["KRO_HOST"] = "127.0.0.1"
+        }
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin:" + (env["PATH"] ?? "")
         process.environment = env
 
@@ -621,6 +633,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         alert.informativeText = error.localizedDescription
         alert.alertStyle = .warning
         alert.runModal()
+    }
+
+    // MARK: JavaScript dialogs and file pickers
+    // WKWebView presents none of these itself. With no WKUIDelegate it answers
+    // confirm() with false and prompt() with null, drops alert() silently, and
+    // ignores a click on <input type="file">. The page relies on all four:
+    // confirm() gates Delete, "remove namespace" and the kubeconfig merge;
+    // prompt() renames a favorite; alert() reports every failure; the file
+    // input picks the kubeconfig to merge. Without this section those
+    // controls did nothing in the app while working in a browser.
+    //
+    // Each is shown as a sheet on the main window. A sheet does not block the
+    // run loop the way runModal() does, so log and Pod Watch streams keep
+    // flowing behind it. WebKit requires every completion handler to be
+    // called exactly once; a sheet always ends through its handler.
+
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        let alert = NSAlert()
+        alert.messageText = "$KRO_APP_NAME"
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window) { _ in completionHandler() }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = "$KRO_APP_NAME"
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")       // first button: Return confirms
+        alert.addButton(withTitle: "Cancel")   // second button: Escape cancels
+        alert.beginSheetModal(for: window) { response in
+            completionHandler(response == .alertFirstButtonReturn)
+        }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
+                 defaultText: String?, initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping (String?) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = "$KRO_APP_NAME"
+        alert.informativeText = prompt
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.stringValue = defaultText ?? ""
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { response in
+            // nil is what JavaScript's prompt() returns for Cancel.
+            completionHandler(response == .alertFirstButtonReturn ? field.stringValue : nil)
+        }
+    }
+
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        // Kubeconfigs usually sit in ~/.kube, which Finder hides by default.
+        panel.showsHiddenFiles = true
+        panel.beginSheetModal(for: window) { response in
+            completionHandler(response == .OK ? panel.urls : nil)
+        }
     }
 
     private func showError(_ message: String) {

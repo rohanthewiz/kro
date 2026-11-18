@@ -16,11 +16,10 @@ const logsTailLines int64 = 500
 
 // PodLogs returns the last 500 lines from each container of the named pod,
 // concatenated with `=== Container: <name> ===` separators when the pod has
-// more than one container (init + regular).
-func PodLogs(client *kubernetes.Clientset, ns, name string) (string, error) {
-	bgCtx := context.Background()
-
-	pod, err := client.CoreV1().Pods(ns).Get(bgCtx, name, metaV1.GetOptions{})
+// more than one container (init + regular). ctx bounds every call; see
+// RequestTimeout.
+func PodLogs(ctx context.Context, client *kubernetes.Clientset, ns, name string) (string, error) {
+	pod, err := client.CoreV1().Pods(ns).Get(ctx, name, metaV1.GetOptions{})
 	if err != nil {
 		return "", serr.Wrap(err)
 	}
@@ -35,7 +34,7 @@ func PodLogs(client *kubernetes.Clientset, ns, name string) (string, error) {
 			Container: container.Name,
 			TailLines: &tail,
 		})
-		stream, sErr := req.Stream(bgCtx)
+		stream, sErr := req.Stream(ctx)
 		if sErr != nil {
 			if multiContainer {
 				fmt.Fprintf(&buf, "=== Container: %s (error: %v) ===\n\n", container.Name, sErr)

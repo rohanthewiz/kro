@@ -4,12 +4,34 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/rohanthewiz/serr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/clientcmd/api"
 )
+
+// Client-side rate limits applied to every clientset the registry builds.
+//
+// client-go defaults to 5 requests/second with a burst of 10. One resources
+// snapshot alone is 13 List calls, so with the defaults every snapshot was
+// throttled by the client's own limiter (the calls past the burst wait in
+// line at 5/s), before counting Pod Watch's per-pod Get/GetLogs calls and the
+// log modal sharing the same clientset. The API server has its own
+// server-side fairness controls (API Priority and Fairness); these values
+// just keep kro from queueing against itself.
+const (
+	clientQPS   = 50
+	clientBurst = 100
+)
+
+// RequestTimeout is the deadline handlers put on one-shot cluster calls
+// (describe, the non-streaming logs fetch, delete). It is applied per call
+// through a context rather than as rest.Config.Timeout, because that field
+// sets http.Client.Timeout for *every* request on the clientset — including
+// the long-lived log follows and pod watches, which it would sever.
+const RequestTimeout = 20 * time.Second
 
 // ContextInfo summarises a kubeconfig context for the UI dropdown.
 type ContextInfo struct {
@@ -116,6 +138,8 @@ func (r *ClientRegistry) Client(ctxName string) (*kubernetes.Clientset, error) {
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to build rest config for context "+ctxName)
 	}
+	restCfg.QPS = clientQPS
+	restCfg.Burst = clientBurst
 
 	cs, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
