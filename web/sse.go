@@ -42,7 +42,13 @@ const (
 // SSE streams resource-tree snapshots for the cookie-selected (context,
 // namespace) of the connecting client. Each connection has its own producer
 // goroutine and selection — multiple tabs can target different
-// clusters/namespaces. rweb.SSEHub broadcasts identical payloads to all
+// clusters/namespaces.
+//
+// The kinds query parameter (see requestedKinds) fixes, for the life of the
+// connection, which on-demand kinds each snapshot lists. The page asks for
+// the kinds of its active tab and reopens the stream when switching to a tab
+// that shows different ones, so a stream never lists Secrets or ConfigMaps
+// unless the Config tab is the one showing. rweb.SSEHub broadcasts identical payloads to all
 // clients, which doesn't fit per-tab targeting, so SetupSSE is wired directly
 // with a per-client channel.
 //
@@ -83,14 +89,15 @@ func (h *handlers) SSE(svr *rweb.Server) rweb.Handler {
 		if interval <= 0 {
 			interval = snapshotInterval
 		}
-		go produceSnapshots(reqCtx, client, sel, evCh, interval)
+		go produceSnapshots(reqCtx, client, sel, requestedKinds(c), evCh, interval)
 
 		return svr.SetupSSE(c, evCh, evResourcesSnapshot)
 	}
 }
 
-// produceSnapshots lists the selection's resources every interval and emits
-// the result on out until ctx is cancelled.
+// produceSnapshots lists the selection's resources (the given kinds, plus the
+// core kinds kube.ListResources always adds) every interval and emits the
+// result on out until ctx is cancelled.
 //
 // Three outcomes per round:
 //   - the tree changed (or this is the first round): a full snapshot event;
@@ -99,7 +106,7 @@ func (h *handlers) SSE(svr *rweb.Server) rweb.Handler {
 //     is alive (its heartbeat watchdog would otherwise reconnect);
 //   - the list failed as a whole: an error event, with the wait before the
 //     next attempt doubling up to snapshotErrBackoffMax so an unreachable
-//     cluster is not dialed 13 times every interval indefinitely.
+//     cluster is not dialed once per kind every interval indefinitely.
 //
 // "Changed" is decided on the marshalled JSON, which includes the formatted
 // age strings; a quiet namespace therefore still produces a snapshot whenever
@@ -109,7 +116,7 @@ func (h *handlers) SSE(svr *rweb.Server) rweb.Handler {
 // Log lines are written on transitions only (first failure, a different
 // failure, recovery, a changed warning set). At one round every ten seconds
 // per open tab, logging every round would bury kro.log.
-func produceSnapshots(ctx context.Context, client kubernetes.Interface, sel kube.Selection, out chan<- any, interval time.Duration) {
+func produceSnapshots(ctx context.Context, client kubernetes.Interface, sel kube.Selection, kinds kube.Kinds, out chan<- any, interval time.Duration) {
 	var (
 		lastSum      [sha256.Size]byte // digest of the last snapshot payload sent
 		haveLast     bool              // false until a snapshot is sent, and again after an error
@@ -130,7 +137,7 @@ func produceSnapshots(ctx context.Context, client kubernetes.Interface, sel kube
 	// round runs one list and emits its outcome. ok=false means the client
 	// has gone; failed reports a cluster-level failure (drives the backoff).
 	round := func() (ok, failed bool) {
-		tree, err := kube.ListResources(ctx, client, sel.Namespace)
+		tree, err := kube.ListResources(ctx, client, sel.Namespace, kinds)
 		if ctx.Err() != nil {
 			return false, false // cancelled mid-list: nothing worth reporting
 		}

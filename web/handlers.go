@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -210,7 +211,28 @@ func (h *handlers) Select(c rweb.Context) error {
 	})
 }
 
-// Resources returns the hierarchical resource tree for the selected (ctx, ns).
+// requestedKinds reads the optional kinds query parameter of /api/resources
+// and /sse/resources: a comma-separated list of the on-demand kinds the
+// active tab shows (kube.ParseKinds). kube.ListResources adds the core kinds
+// to whatever is asked for, so "kinds=" (present but empty) means "the core
+// kinds only".
+//
+// An absent parameter means every kind. That keeps the endpoints complete
+// for a plain curl and for a page loaded before the parameter existed (still
+// open in KRo.app across an upgrade), which renders every tab from one tree
+// and does not know about tree.kinds. The query is parsed with net/url
+// because rweb's QueryParam cannot tell an absent parameter from an empty
+// one; a malformed query falls back to every kind, the old behavior.
+func requestedKinds(c rweb.Context) kube.Kinds {
+	q, err := url.ParseQuery(c.Request().Query())
+	if err != nil || !q.Has("kinds") {
+		return kube.AllKinds
+	}
+	return kube.ParseKinds(q.Get("kinds"))
+}
+
+// Resources returns the hierarchical resource tree for the selected (ctx, ns),
+// limited to the requested kinds (see requestedKinds).
 func (h *handlers) Resources(c rweb.Context) error {
 	sel, err := h.resolve(c)
 	if err != nil {
@@ -223,7 +245,7 @@ func (h *handlers) Resources(c rweb.Context) error {
 
 	// Bound to the request: a client that navigates away (or switches
 	// namespace mid-load) cancels the lists still in flight.
-	tree, err := kube.ListResources(c.Request().Context(), client, sel.Namespace)
+	tree, err := kube.ListResources(c.Request().Context(), client, sel.Namespace, requestedKinds(c))
 	if err != nil {
 		// A whole-cluster failure is the cluster's fault, not kro's: 503
 		// with the cause, which the page shows as a banner.

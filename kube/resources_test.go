@@ -81,7 +81,7 @@ func TestListResourcesTreeAndStableOrder(t *testing.T) {
 		&coreV1.Pod{ObjectMeta: metaV1.ObjectMeta{Name: "elsewhere", Namespace: "other", UID: "elsewhere"}},
 	)
 
-	tree, err := ListResources(t.Context(), client, testNS)
+	tree, err := ListResources(t.Context(), client, testNS, AllKinds)
 	if err != nil {
 		t.Fatalf("ListResources: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestListResourcesTreeAndStableOrder(t *testing.T) {
 
 	first, _ := json.Marshal(tree)
 	for i := range 25 {
-		again, err := ListResources(t.Context(), client, testNS)
+		again, err := ListResources(t.Context(), client, testNS, AllKinds)
 		if err != nil {
 			t.Fatalf("ListResources (repeat %d): %v", i, err)
 		}
@@ -140,7 +140,7 @@ func TestListResourcesPartialFailureWarnings(t *testing.T) {
 	failList(client, "secrets", forbidden("secrets"))
 	failList(client, "ingresses", errors.New("etcd leader changed"))
 
-	tree, err := ListResources(t.Context(), client, testNS)
+	tree, err := ListResources(t.Context(), client, testNS, AllKinds)
 	if err != nil {
 		t.Fatalf("ListResources: %v", err)
 	}
@@ -158,17 +158,143 @@ func TestListResourcesPartialFailureWarnings(t *testing.T) {
 
 // Every kind failing for a non-permission reason means the cluster is the
 // problem: one error, not thirteen misleading RBAC warnings over empty tables.
+// "Every kind" is every kind that was listed: a core-only call (the usual
+// one) must reach the verdict too, not count the kinds it skipped as working.
 func TestListResourcesClusterUnavailable(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	client.PrependReactor("list", "*", func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, errors.New("dial tcp 10.0.0.1:443: connect: connection refused")
-	})
-	_, err := ListResources(t.Context(), client, testNS)
-	if !errors.Is(err, ErrClusterUnavailable) {
-		t.Fatalf("err = %v, want ErrClusterUnavailable", err)
+	for _, kinds := range []Kinds{AllKinds, 0} {
+		client := fake.NewSimpleClientset()
+		client.PrependReactor("list", "*", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, errors.New("dial tcp 10.0.0.1:443: connect: connection refused")
+		})
+		_, err := ListResources(t.Context(), client, testNS, kinds)
+		if !errors.Is(err, ErrClusterUnavailable) {
+			t.Fatalf("kinds %v: err = %v, want ErrClusterUnavailable", kinds.Names(), err)
+		}
+		if !strings.Contains(err.Error(), "connection refused") {
+			t.Errorf("kinds %v: error should carry the cause, got %q", kinds.Names(), err)
+		}
 	}
-	if !strings.Contains(err.Error(), "connection refused") {
-		t.Errorf("error should carry the cause, got %q", err)
+}
+
+// listedResources is the set of resources the fake was asked to List, in the
+// order the asks arrived (which, the lists being concurrent, is arbitrary).
+func listedResources(client *fake.Clientset) map[string]int {
+	seen := map[string]int{}
+	for _, a := range client.Actions() {
+		if a.GetVerb() == "list" {
+			seen[a.GetResource().Resource]++
+		}
+	}
+	return seen
+}
+
+// Only the requested kinds, plus the core kinds, are asked of the cluster,
+// and the tree names exactly those in Kinds. Secrets in particular must not
+// be listed for a tab that does not show them: that is the point of the
+// selection (they come back whole, data included).
+func TestListResourcesListsOnlySelectedKinds(t *testing.T) {
+	core := []string{"jobs", "deployments", "replicasets", "statefulsets", "daemonsets", "pods", "services"}
+	cases := []struct {
+		name  string
+		kinds Kinds
+		want  []string
+	}{
+		{"zero value is core only", 0, core},
+		{"core is not duplicated", CoreKinds, core},
+		{"one tab's kinds", KindConfigMaps | KindSecrets, append(append([]string{}, core...), "configmaps", "secrets")},
+		{"core added to a lone extra", KindStorageClasses, append(append([]string{}, core...), "storageclasses")},
+		{"everything", AllKinds, AllKinds.Names()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := fake.NewSimpleClientset(
+				&coreV1.Secret{ObjectMeta: meta("token", time.Now(), "")},
+				&coreV1.ConfigMap{ObjectMeta: meta("settings", time.Now(), "")},
+			)
+			tree, err := ListResources(t.Context(), client, testNS, tc.kinds)
+			if err != nil {
+				t.Fatalf("ListResources: %v", err)
+			}
+			if got, want := strings.Join(tree.Kinds, ","), strings.Join(tc.want, ","); got != want {
+				t.Errorf("tree.Kinds = %s, want %s", got, want)
+			}
+			seen := listedResources(client)
+			if len(seen) != len(tc.want) {
+				t.Errorf("listed %v, want exactly %v", seen, tc.want)
+			}
+			for _, r := range tc.want {
+				if seen[r] != 1 {
+					t.Errorf("%s listed %d times, want once (listed: %v)", r, seen[r], seen)
+				}
+			}
+			// The tree fields follow the selection: a kind not listed is
+			// empty even though the namespace has one.
+			if tc.kinds.Has(KindSecrets) != (len(tree.Secrets) == 1) {
+				t.Errorf("secrets = %+v with kinds %v", tree.Secrets, tree.Kinds)
+			}
+			if tc.kinds.Has(KindConfigMaps) != (len(tree.ConfigMaps) == 1) {
+				t.Errorf("configmaps = %+v with kinds %v", tree.ConfigMaps, tree.Kinds)
+			}
+		})
+	}
+}
+
+// Without the owner kinds, owned pods would be reported as orphans. Asking
+// for an unrelated kind alone must still place the pods under their owners.
+func TestListResourcesKeepsPodTreeWhateverIsAsked(t *testing.T) {
+	old := time.Now().Add(-48 * time.Hour)
+	client := fake.NewSimpleClientset(
+		&batchV1.Job{ObjectMeta: meta("migrate", old, "")},
+		pod("migrate-x", "migrate", old),
+		replicaSet("web-rs", "", old, 1),
+		pod("web-rs-1", "web-rs", old),
+	)
+	tree, err := ListResources(t.Context(), client, testNS, KindSecrets)
+	if err != nil {
+		t.Fatalf("ListResources: %v", err)
+	}
+	if len(tree.OrphanPods) != 0 {
+		t.Errorf("owned pods reported as orphans: %+v", tree.OrphanPods)
+	}
+	if len(tree.Jobs) != 1 || len(tree.Jobs[0].Children) != 1 {
+		t.Errorf("jobs = %+v, want migrate with its pod", tree.Jobs)
+	}
+}
+
+// A kind's warning keeps its plural label ("Could not list ConfigMaps"), which
+// the page routes to the kind's tab, whichever subset was listed.
+func TestListResourcesWarningLabelsWithSelection(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	failList(client, "configmaps", forbidden("configmaps"))
+	tree, err := ListResources(t.Context(), client, testNS, KindConfigMaps)
+	if err != nil {
+		t.Fatalf("ListResources: %v", err)
+	}
+	want := "Could not list ConfigMaps — check RBAC permissions"
+	if len(tree.Warnings) != 1 || tree.Warnings[0] != want {
+		t.Errorf("warnings = %q, want [%q]", tree.Warnings, want)
+	}
+}
+
+func TestParseKinds(t *testing.T) {
+	cases := []struct {
+		in   string
+		want Kinds
+	}{
+		{"", 0},
+		{"secrets", KindSecrets},
+		{"configmaps,secrets", KindConfigMaps | KindSecrets},
+		{" Secrets , CONFIGMAPS ", KindConfigMaps | KindSecrets}, // case and spaces
+		{"secrets,,bogus,secrets", KindSecrets},                  // unknown and empty names skipped
+		{strings.Join(AllKinds.Names(), ","), AllKinds},          // round trip
+	}
+	for _, tc := range cases {
+		if got := ParseKinds(tc.in); got != tc.want {
+			t.Errorf("ParseKinds(%q) = %v, want %v", tc.in, got.Names(), tc.want.Names())
+		}
+	}
+	if n := len(AllKinds.Names()); n != len(kindTable) {
+		t.Errorf("AllKinds names %d kinds, kindTable has %d", n, len(kindTable))
 	}
 }
 
@@ -179,7 +305,7 @@ func TestListResourcesAllForbiddenIsNotClusterFailure(t *testing.T) {
 	client.PrependReactor("list", "*", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, forbidden(a.GetResource().Resource)
 	})
-	tree, err := ListResources(t.Context(), client, testNS)
+	tree, err := ListResources(t.Context(), client, testNS, AllKinds)
 	if err != nil {
 		t.Fatalf("ListResources: %v", err)
 	}
@@ -219,7 +345,7 @@ func TestListResourcesRunsListsConcurrently(t *testing.T) {
 	const delay = 200 * time.Millisecond
 	client := emptyListAPI(t, delay)
 	start := time.Now()
-	tree, err := ListResources(t.Context(), client, testNS)
+	tree, err := ListResources(t.Context(), client, testNS, AllKinds)
 	if err != nil {
 		t.Fatalf("ListResources: %v", err)
 	}
@@ -239,7 +365,7 @@ func TestListResourcesCancelledIsNotClusterFailure(t *testing.T) {
 	client := emptyListAPI(t, 2*time.Second)
 	ctx, cancel := context.WithCancel(t.Context())
 	time.AfterFunc(100*time.Millisecond, cancel)
-	_, err := ListResources(ctx, client, testNS)
+	_, err := ListResources(ctx, client, testNS, AllKinds)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}

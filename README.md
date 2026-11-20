@@ -186,7 +186,7 @@ web/      rweb routes, handlers, SSE feeder, page render, embedded CSS/JS
 | POST   | `/api/favorites/go`        | Switch to `{context, namespace}` in one round trip: pins the namespace, sets both cookies, returns the new namespace list |
 | GET    | `/api/targets`             | Every destination for the quick switcher (no cluster calls) |
 | POST   | `/api/kubeconfig/merge`    | Upload a kubeconfig snippet (multipart `file`), merge into the primary kubeconfig, reload contexts |
-| GET    | `/api/resources`           | One-shot resource tree (503 `{"error"}` when the cluster is unreachable) |
+| GET    | `/api/resources?kinds=`    | One-shot resource tree (503 `{"error"}` when the cluster is unreachable). `kinds` adds on-demand kinds (`ingresses`, `configmaps`, `secrets`, `persistentvolumes`, `persistentvolumeclaims`, `storageclasses`) to the core ones (workloads, pods, services); omit it to list everything. `tree.kinds` names what was listed |
 | GET    | `/api/describe?kind=&name=`| kubectl-describe text                                  |
 | GET    | `/api/logs?name=`          | Pod logs (all containers, last 500 lines each)         |
 | DELETE | `/api/resources`           | Delete a resource `{kind, name}`                       |
@@ -197,7 +197,7 @@ web/      rweb routes, handlers, SSE feeder, page render, embedded CSS/JS
 | GET    | `/api/watch/export?context=&namespace=&pod=` | Download one stream's log file (attachment) |
 | GET    | `/api/watch/loginfo`       | Watch-log folder path, file count, size, retention     |
 | POST   | `/api/watch/cleanup`       | Delete watch logs older than `{days}` (0 = all; listed streams' files kept) |
-| GET    | `/sse/resources`           | SSE stream for the cookie scope: `resources_snapshot` (the tree, when it changed), `resources_tick` (checked, unchanged), `resources_error` (`{"error"}`; the cluster could not be listed) |
+| GET    | `/sse/resources?kinds=`    | SSE stream for the cookie scope, listing the same `kinds` as `/api/resources` every round: `resources_snapshot` (the tree, when it changed), `resources_tick` (checked, unchanged), `resources_error` (`{"error"}`; the cluster could not be listed) |
 | GET    | `/sse/logs?name=`          | SSE live log stream for a pod                          |
 | GET    | `/sse/metrics?name=`       | SSE per-pod CPU/memory samples from metrics.k8s.io     |
 | GET    | `/sse/term?cmd=...`        | Run `kubectl <cmd>` against active ctx/ns; SSE stdout/stderr/done |

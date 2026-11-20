@@ -15,7 +15,7 @@ import (
 // Client-side rate limits applied to every clientset the registry builds.
 //
 // client-go defaults to 5 requests/second with a burst of 10. One resources
-// snapshot alone is 13 List calls, so with the defaults every snapshot was
+// snapshot alone is up to 13 List calls, so with the defaults every snapshot was
 // throttled by the client's own limiter (the calls past the burst wait in
 // line at 5/s), before counting Pod Watch's per-pod Get/GetLogs calls and the
 // log modal sharing the same clientset. The API server has its own

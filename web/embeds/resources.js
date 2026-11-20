@@ -272,6 +272,63 @@
     var ACTIVE_TAB_KEY = 'kro_active_tab';
     var TAB_SIDEBAR_COLLAPSED_KEY = 'kro_tab_sidebar_collapsed';
 
+    // ----- Kinds listed on demand -----
+    // The server always lists the workload kinds (Jobs, Deployments,
+    // ReplicaSets, StatefulSets, DaemonSets, Pods) and Services: the pod tree
+    // and the summary cards need them whichever tab is showing. The kinds
+    // below are each shown by one tab and are listed only while that tab is
+    // active, so a snapshot taken for the Pods tab no longer fetches every
+    // Secret and ConfigMap in the namespace (data included) to count keys.
+    //
+    //   active tab ──► tabKinds() ──► ?kinds=configmaps,secrets ──► server
+    //                                                                 │
+    //   section builders ◄── treeCarries(tree, kind) ◄── tree.kinds ◄─┘
+    //
+    // Section slug -> the kind it renders. The kind name serves both ends: it
+    // is the API resource name the server is asked for and the tree field the
+    // section reads (kube.kindTable keeps the two equal).
+    var SECTION_ON_DEMAND_KIND = {
+        'ingresses':      'ingresses',
+        'pvs':            'persistentvolumes',
+        'pvcs':           'persistentvolumeclaims',
+        'storageclasses': 'storageclasses',
+        'configmaps':     'configmaps',
+        'secrets':        'secrets'
+    };
+
+    // The tab on screen. Kept in a variable (set by switchTab) rather than
+    // re-read from localStorage, which may be unavailable.
+    var activeTabId = TAB_CONFIG[0].id;
+
+    // The on-demand kinds a tab's sections render, sorted, so the joined
+    // string is a stable key: tabs that need the same kinds (every tab that
+    // shows only core kinds needs none) share one stream.
+    function tabKinds(tabId) {
+        var kinds = [];
+        TAB_CONFIG.forEach(function(t) {
+            if (t.id !== tabId) return;
+            t.sections.forEach(function(slug) {
+                var k = SECTION_ON_DEMAND_KIND[slug];
+                if (k && kinds.indexOf(k) === -1) kinds.push(k);
+            });
+        });
+        return kinds.sort();
+    }
+
+    function activeKindsKey() { return tabKinds(activeTabId).join(','); }
+
+    // Query string for /api/resources and /sse/resources. Always sent, even
+    // when empty ("?kinds=" = core kinds only): an absent parameter makes the
+    // server list every kind, which it keeps for curl and for a page loaded
+    // before the parameter existed.
+    function kindsQuery(key) { return '?kinds=' + encodeURIComponent(key); }
+
+    // Whether tree was listed with kind. A tree with no kinds list comes from
+    // a server that predates on-demand kinds, and those listed everything.
+    function treeCarries(tree, kind) {
+        return !tree || !tree.kinds || tree.kinds.indexOf(kind) !== -1;
+    }
+
     window.toggleTabSidebar = function() {
         var bar = document.getElementById('tab-sidebar');
         if (!bar) return;
@@ -315,6 +372,7 @@
             panels[j].classList.toggle('active', panels[j].getAttribute('data-tab-panel') === id);
         }
         localStorage.setItem(ACTIVE_TAB_KEY, id);
+        activeTabId = id;
         // The Pod Watch page (watch.js) connects its status stream only while
         // its tab is visible; tee frames persist across switches.
         if (id === 'watch') {
@@ -322,7 +380,22 @@
         } else if (window.watchPageDeactivate) {
             window.watchPageDeactivate();
         }
+        retargetResourcesStream();
     };
+
+    // Reopen the resources stream when the active tab renders different
+    // on-demand kinds than the open stream lists. Its first event is a full
+    // snapshot, so the tab fills as soon as that one list round returns; no
+    // one-shot fetch is needed alongside. Moving between tabs that need the
+    // same kinds (Pods, Deployments, Sets, Watch) keeps the stream as it is.
+    //
+    // Only an open stream is retargeted. Before the first load, while paused
+    // (window hidden) and while a heartbeat reconnect is pending, there is
+    // none, and whatever opens it next reads the active tab itself.
+    function retargetResourcesStream() {
+        if (!resourcesSource || resourcesStreamKinds === activeKindsKey()) return;
+        initResourcesStream();
+    }
 
     function initTabs() {
         var btns = document.querySelectorAll('.tab-btn');
@@ -377,7 +450,25 @@
             (tree.context !== currentCtx || tree.namespace !== currentNs)) {
             return;
         }
-        if (!force && interactionActive()) {
+        // A tree listed for another tab (a refresh still in flight when the
+        // tab changed) lacks kinds this tab renders. Painting it would put
+        // "Loading" back over rows the retargeted stream already delivered,
+        // and that stream would then only tick (nothing changed on its side),
+        // leaving the panel stuck. The open stream lists what this tab needs,
+        // so dropping the tree loses nothing.
+        var wanted = tabKinds(activeTabId);
+        if (!wanted.every(function(k) { return treeCarries(tree, k); })) return;
+        // The interaction hold keeps rows from changing under the user. A
+        // tree bringing a kind the screen has no rows for yet (the first
+        // snapshot after switching to Config, say) is let through: the panel
+        // it fills shows only a Loading placeholder, and rebuildTables leaves
+        // a panel whose markup is unchanged untouched, so a text selection
+        // left in another tab usually survives. Holding it instead would
+        // keep the new tab on Loading until that selection is released.
+        var bringsKinds = !!lastTree && wanted.some(function(k) {
+            return !treeCarries(lastTree, k);
+        });
+        if (!force && !bringsKinds && interactionActive()) {
             pendingTree = tree; // newest wins; older held snapshots are obsolete
             updateStatusTitle(); // the dot's tooltip says an update is waiting
             return;
@@ -517,7 +608,7 @@
         var btn = document.getElementById('btn-refresh');
         if (btn) btn.classList.add('busy');
 
-        fetch('/api/resources')
+        fetch('/api/resources' + kindsQuery(activeKindsKey()))
         .then(function(r) { return r.json(); })
         .then(function(tree) {
             if (!tree.error) noteResourcesFresh();
@@ -752,25 +843,42 @@
         'services': function(ctx) {
             return flatSection('services', 'Services', ctx.tree.services || []);
         },
+        // The sections below render on-demand kinds (SECTION_ON_DEMAND_KIND):
+        // a tree listed for another tab does not carry them.
         'ingresses': function(ctx) {
-            return flatSection('ingresses', 'Ingresses', ctx.tree.ingresses || []);
+            return onDemandSection(ctx, 'ingresses', 'Ingresses');
         },
         'pvs': function(ctx) {
-            return flatSection('pvs', 'PersistentVolumes', ctx.tree.persistentvolumes || []);
+            return onDemandSection(ctx, 'pvs', 'PersistentVolumes');
         },
         'pvcs': function(ctx) {
-            return flatSection('pvcs', 'PersistentVolumeClaims', ctx.tree.persistentvolumeclaims || []);
+            return onDemandSection(ctx, 'pvcs', 'PersistentVolumeClaims');
         },
         'storageclasses': function(ctx) {
-            return flatSection('storageclasses', 'StorageClasses', ctx.tree.storageclasses || []);
+            return onDemandSection(ctx, 'storageclasses', 'StorageClasses');
         },
         'configmaps': function(ctx) {
-            return flatSection('configmaps', 'ConfigMaps', ctx.tree.configmaps || []);
+            return onDemandSection(ctx, 'configmaps', 'ConfigMaps');
         },
         'secrets': function(ctx) {
-            return flatSection('secrets', 'Secrets', ctx.tree.secrets || []);
+            return onDemandSection(ctx, 'secrets', 'Secrets');
         }
     };
+
+    // A flat section for an on-demand kind. When the tree was not listed with
+    // that kind, its empty field says nothing about the namespace, so the
+    // section says Loading instead of "No secrets found". That is also the
+    // truth: a tab showing this section has asked for the kind (switchTab
+    // retargets the stream), and only hidden tabs keep the placeholder.
+    function onDemandSection(ctx, slug, title) {
+        var kind = SECTION_ON_DEMAND_KIND[slug];
+        if (!treeCarries(ctx.tree, kind)) {
+            return sectionShell(slug, title, '…',
+                '<div class="table-wrapper"><div class="loading">Loading ' +
+                title.toLowerCase() + '</div></div>');
+        }
+        return flatSection(slug, title, ctx.tree[kind] || []);
+    }
 
     // Maps a resource kind (as it appears in a warning message) to the tab
     // that owns it, so an RBAC warning surfaces on the relevant panel instead
@@ -2431,6 +2539,7 @@
     // Every one of them proves the stream is alive and feeds the watchdog.
     var HEARTBEAT_TIMEOUT_MS = 60000;
     var resourcesSource = null;
+    var resourcesStreamKinds = null; // activeKindsKey() the open stream was opened with
     var resourcesHeartbeatTimer = null;
     var resourcesStatus = null;
     var lastGoodAt = 0; // ms timestamp of the last successful check of the cluster
@@ -2479,8 +2588,13 @@
         // visibility handling below); becoming visible reopens it.
         if (document.hidden) { setStatus('paused'); return; }
 
-        var source = new EventSource('/sse/resources');
+        // The kinds are fixed for the life of the connection (EventSource's
+        // own reconnects reuse this URL); switchTab opens a new stream when
+        // the active tab needs different ones.
+        var kinds = activeKindsKey();
+        var source = new EventSource('/sse/resources' + kindsQuery(kinds));
         resourcesSource = source;
+        resourcesStreamKinds = kinds;
 
         source.addEventListener('resources_snapshot', function(e) {
             if (source !== resourcesSource) return; // a superseded stream's straggler
@@ -2523,7 +2637,7 @@
     // ----- Pause while hidden -----
     // A hidden window (minimized, another Space, KRo.app in the background for
     // days) has nobody to show snapshots to, but the server would keep listing
-    // 13 resource kinds every 10s on its behalf. Closing the stream stops
+    // the namespace's resources every 10s on its behalf. Closing the stream stops
     // that: the server's producer ends with the connection. A short grace
     // period keeps a quick Cmd+Tab away and back from tearing it down.
     // Only this stream is paused. Logs, Pod Watch and terminal streams are

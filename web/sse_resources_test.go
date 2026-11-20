@@ -7,8 +7,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,18 +26,33 @@ import (
 // Every list answers empty, except pods once addPod is set; while failing is
 // set every request answers 500. podLists counts pod List calls, i.e. one per
 // snapshot round, which is how the tests observe the producer running (or
-// having stopped).
+// having stopped). lists counts every List by resource (the last path
+// segment: "pods", "secrets", "storageclasses"), so a test can see which
+// kinds a round asked the cluster for.
 type fakeKubeAPI struct {
 	srv      *httptest.Server
 	podLists atomic.Int64
 	addPod   atomic.Bool
 	failing  atomic.Bool
+
+	mu    sync.Mutex
+	lists map[string]int
+}
+
+// listed reports how many times resource has been listed so far.
+func (f *fakeKubeAPI) listed(resource string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lists[resource]
 }
 
 func newFakeKubeAPI(t *testing.T) *fakeKubeAPI {
 	t.Helper()
-	f := &fakeKubeAPI{}
+	f := &fakeKubeAPI{lists: map[string]int{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.lists[path.Base(r.URL.Path)]++
+		f.mu.Unlock()
 		isPods := strings.HasSuffix(r.URL.Path, "/pods")
 		if isPods {
 			f.podLists.Add(1)
@@ -236,6 +253,82 @@ func TestResourcesStreamLifecycle(t *testing.T) {
 	time.Sleep(400 * time.Millisecond) // ten intervals' worth
 	if now := fake.podLists.Load(); now != settled {
 		t.Errorf("producer still listing after disconnect: %d → %d pod lists", settled, now)
+	}
+}
+
+// firstSnapshot opens the stream at path (query included) and returns its
+// first snapshot, closing the connection afterwards.
+func firstSnapshot(t *testing.T, url string) kube.ResourceTree {
+	t.Helper()
+	res, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer res.Body.Close()
+	ev := nextEvent(t, readSSE(bufio.NewReader(res.Body)), evResourcesSnapshot)
+	var tree kube.ResourceTree
+	if err := json.Unmarshal([]byte(ev.data), &tree); err != nil {
+		t.Fatalf("snapshot is not a tree: %v", err)
+	}
+	return tree
+}
+
+// The stream lists only the kinds the page's active tab shows, plus the core
+// kinds, and the tree names what it carries. Without the parameter (curl, a
+// page from before it existed) everything is listed, as before.
+func TestResourcesStreamListsRequestedKinds(t *testing.T) {
+	core := "jobs,deployments,replicasets,statefulsets,daemonsets,pods,services"
+	cases := []struct {
+		name      string
+		query     string
+		wantKinds string
+		listed    []string // must have been listed
+		notListed []string // must not have been
+	}{
+		{"core tab", "?kinds=", core, []string{"pods", "services", "replicasets"}, []string{"secrets", "configmaps", "ingresses"}},
+		{"config tab", "?kinds=configmaps,secrets", core + ",configmaps,secrets", []string{"pods", "secrets", "configmaps"}, []string{"ingresses", "storageclasses"}},
+		{"no parameter", "", strings.Join(kube.AllKinds.Names(), ","), []string{"pods", "secrets", "storageclasses"}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeKubeAPI(t)
+			base := serveResourcesStream(t, fake.srv.URL, time.Hour) // one round per connection
+			tree := firstSnapshot(t, base+"/sse/resources"+tc.query)
+			if got := strings.Join(tree.Kinds, ","); got != tc.wantKinds {
+				t.Errorf("tree.kinds = %s, want %s", got, tc.wantKinds)
+			}
+			for _, r := range tc.listed {
+				if fake.listed(r) == 0 {
+					t.Errorf("%s was not listed", r)
+				}
+			}
+			for _, r := range tc.notListed {
+				if n := fake.listed(r); n != 0 {
+					t.Errorf("%s listed %d times; this tab does not show it", r, n)
+				}
+			}
+		})
+	}
+}
+
+// The one-shot endpoint takes the same parameter.
+func TestResourcesEndpointListsRequestedKinds(t *testing.T) {
+	fake := newFakeKubeAPI(t)
+	base := serveResourcesStream(t, fake.srv.URL, time.Hour)
+	res, err := http.Get(base + "/api/resources?kinds=ingresses")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer res.Body.Close()
+	var tree kube.ResourceTree
+	if err := json.NewDecoder(res.Body).Decode(&tree); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := strings.Join(tree.Kinds, ","); !strings.HasSuffix(got, ",services,ingresses") {
+		t.Errorf("tree.kinds = %s, want the core kinds then ingresses", got)
+	}
+	if fake.listed("ingresses") != 1 || fake.listed("secrets") != 0 {
+		t.Errorf("ingresses listed %d, secrets listed %d; want 1 and 0", fake.listed("ingresses"), fake.listed("secrets"))
 	}
 }
 

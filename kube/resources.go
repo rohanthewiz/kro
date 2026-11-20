@@ -55,10 +55,129 @@ type ResourceTree struct {
 	PersistentVolumes      []K8sResource `json:"persistentvolumes"`
 	PersistentVolumeClaims []K8sResource `json:"persistentvolumeclaims"`
 	StorageClasses         []K8sResource `json:"storageclasses"`
-	Warnings               []string      `json:"warnings,omitempty"`
+	// Kinds names every kind this tree was listed with (API resource names,
+	// see kindTable), in a fixed order. A kind left out was not asked for,
+	// so its field is empty for that reason and not because the namespace
+	// has none: the page renders it as not loaded rather than "No secrets
+	// found". A kind that was asked for but failed is still named here; its
+	// failure is in Warnings.
+	Kinds    []string `json:"kinds"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
-// ListTimeout bounds one whole ListResources call. The 13 lists run
+// Kinds is a set of the resource kinds ListResources can list, one bit per
+// kind. A bitset rather than a map: the set is small and fixed, it compares
+// with ==, and its zero value is the empty set.
+type Kinds uint16
+
+const (
+	KindJobs Kinds = 1 << iota
+	KindDeployments
+	KindReplicaSets
+	KindStatefulSets
+	KindDaemonSets
+	KindPods
+	KindServices
+	KindIngresses
+	KindConfigMaps
+	KindSecrets
+	KindPersistentVolumes
+	KindPersistentVolumeClaims
+	KindStorageClasses
+)
+
+// CoreKinds are listed on every call, whatever was asked for. Two reasons:
+//   - The pod tree. Pods are placed under their owners by UID, so listing
+//     Pods without every owner kind (Jobs, ReplicaSets, StatefulSets,
+//     DaemonSets, and Deployments above the ReplicaSets) would report owned
+//     pods as orphans. These kinds only make sense listed together.
+//   - The summary cards (jobs, deployments, pods, services) sit above every
+//     tab, so their counts are needed whichever tab is showing.
+//
+// The remaining kinds are each shown by a single tab and are listed only for
+// it. Secrets and ConfigMaps in particular come back whole (data included)
+// just to count their keys, which is the bulk of a snapshot's bytes in a
+// namespace that holds many of them.
+const CoreKinds = KindJobs | KindDeployments | KindReplicaSets | KindStatefulSets |
+	KindDaemonSets | KindPods | KindServices
+
+// AllKinds is every kind ListResources knows.
+const AllKinds = CoreKinds | KindIngresses | KindConfigMaps | KindSecrets |
+	KindPersistentVolumes | KindPersistentVolumeClaims | KindStorageClasses
+
+// kindTable names each kind two ways, in the fixed order kinds are listed and
+// reported in (the order warnings appear in, and the order of
+// ResourceTree.Kinds):
+//   - resource: the API resource name (lowercase plural). The page asks for
+//     kinds by this name and ResourceTree.Kinds reports it. For every kind
+//     with a tree field of its own it is also that field's JSON name, so the
+//     page checks a section's field against tree.kinds with one string.
+//   - label: the plural used in warnings ("Could not list <label> — …"). The
+//     page routes a warning to the tab that owns the kind by this word.
+var kindTable = [...]struct {
+	kind     Kinds
+	resource string
+	label    string
+}{
+	{KindJobs, "jobs", "Jobs"},
+	{KindDeployments, "deployments", "Deployments"},
+	{KindReplicaSets, "replicasets", "ReplicaSets"},
+	{KindStatefulSets, "statefulsets", "StatefulSets"},
+	{KindDaemonSets, "daemonsets", "DaemonSets"},
+	{KindPods, "pods", "Pods"},
+	{KindServices, "services", "Services"},
+	{KindIngresses, "ingresses", "Ingresses"},
+	{KindConfigMaps, "configmaps", "ConfigMaps"},
+	{KindSecrets, "secrets", "Secrets"},
+	{KindPersistentVolumes, "persistentvolumes", "PersistentVolumes"},
+	{KindPersistentVolumeClaims, "persistentvolumeclaims", "PersistentVolumeClaims"},
+	{KindStorageClasses, "storageclasses", "StorageClasses"},
+}
+
+// Has reports whether every kind in x is in k.
+func (k Kinds) Has(x Kinds) bool { return k&x == x }
+
+// Names returns the resource names of the kinds in k, in kindTable order.
+func (k Kinds) Names() []string {
+	names := make([]string, 0, len(kindTable))
+	for _, e := range kindTable {
+		if k.Has(e.kind) {
+			names = append(names, e.resource)
+		}
+	}
+	return names
+}
+
+// label is the warning plural for a single kind ("" for anything else).
+func (k Kinds) label() string {
+	for _, e := range kindTable {
+		if e.kind == k {
+			return e.label
+		}
+	}
+	return ""
+}
+
+// ParseKinds reads a comma-separated list of resource names ("configmaps,
+// secrets"). Names are matched case-insensitively and surrounding spaces are
+// ignored. An unknown name is skipped rather than failing the request: the
+// returned tree's Kinds says what was actually listed, which is what the page
+// goes by.
+func ParseKinds(csv string) Kinds {
+	var k Kinds
+	for name := range strings.SplitSeq(csv, ",") {
+		name = strings.ToLower(strings.TrimSpace(name))
+		for _, e := range kindTable {
+			if e.resource == name {
+				k |= e.kind
+				break
+			}
+		}
+	}
+	return k
+}
+
+// ListTimeout bounds one whole ListResources call. The lists (up to 13) run
 // concurrently, so this is also the longest any single one may take. It is a
 // little longer than the page's 10s refresh cadence on purpose: a slow but
 // working cluster still gets its answer, while an unreachable one (VPN down,
@@ -74,33 +193,41 @@ var ErrClusterUnavailable = errors.New("cluster unavailable")
 
 // ListResources fetches the resource tree for the given namespace.
 //
-// The 13 kinds are listed concurrently under one ListTimeout deadline:
+// kinds selects what is listed. CoreKinds are always added to it (see there
+// for why), so the zero value lists the workload tree and Services only, and
+// AllKinds lists everything. A kind not selected is not requested from the
+// cluster at all; its tree field stays empty and tree.Kinds leaves it out.
+//
+// The selected kinds are listed concurrently under one ListTimeout deadline:
 //
 //	          ┌─ Jobs ──────────┐
 //	ctx+15s ──┼─ Deployments ───┼──► wait ──► classify errors ──► build tree
-//	          ├─ … 11 more … ───┤
+//	          ├─ … the rest … ──┤
 //	          └─ StorageClasses ┘
 //
 // Sequentially, the wall time was the sum of the calls (and against an
-// unreachable cluster, 13 dial timeouts back to back). Concurrently it is the
-// slowest single call, capped by the deadline. Each goroutine writes only its
-// own result variable and its own slot of errs, so no locking is needed.
+// unreachable cluster, one dial timeout per kind back to back). Concurrently
+// it is the slowest single call, capped by the deadline. Each goroutine
+// writes only its own result variable and its own slot of errs, so no
+// locking is needed.
 //
 // Error policy:
 //   - A kind that fails while others succeed is skipped with a user-visible
 //     warning. Only a real 403 is reported as an RBAC gap; anything else
 //     carries its actual cause.
-//   - If every kind failed and none of the failures was a 403, the problem is
-//     the cluster, not permissions: the call returns ErrClusterUnavailable
-//     wrapping a summary of the cause. (A namespace-scoped user who is
-//     forbidden everything still gets the per-kind RBAC warnings.)
+//   - If every selected kind failed and none of the failures was a 403, the
+//     problem is the cluster, not permissions: the call returns
+//     ErrClusterUnavailable wrapping a summary of the cause. (A
+//     namespace-scoped user who is forbidden everything still gets the
+//     per-kind RBAC warnings.)
 //
 // ctx cancellation (the browser went away) aborts in-flight lists.
 //
 // Nothing is logged here: this runs every few seconds per open page, so the
 // callers log (on transitions only) instead. The warnings and the returned
 // error carry everything a caller needs.
-func ListResources(ctx context.Context, client kubernetes.Interface, ns string) (ResourceTree, error) {
+func ListResources(ctx context.Context, client kubernetes.Interface, ns string, kinds Kinds) (ResourceTree, error) {
+	kinds = (kinds | CoreKinds) & AllKinds
 	ctx, cancel := context.WithTimeout(ctx, ListTimeout)
 	defer cancel()
 	listOpts := metaV1.ListOptions{}
@@ -121,32 +248,43 @@ func ListResources(ctx context.Context, client kubernetes.Interface, ns string) 
 		storageClasses *storageV1.StorageClassList
 	)
 
-	// The order here is the order warnings are reported in, so it is fixed
-	// (and matches the order the kinds were listed in before this ran
-	// concurrently). kind is the plural the page's warning router keys on
-	// ("Could not list <kind>").
-	calls := []struct {
-		kind string
+	// One entry per kind, in kindTable order: the order here is the order
+	// warnings are reported in, so it is fixed (and matches the order the
+	// kinds were listed in before this ran concurrently). Only the selected
+	// kinds are kept below; an unselected kind's result stays nil and is
+	// replaced by an empty list like a failed one.
+	type listCall struct {
+		kind Kinds
 		run  func() error
-	}{
-		{"Jobs", func() (err error) { jobs, err = client.BatchV1().Jobs(ns).List(ctx, listOpts); return }},
-		{"Deployments", func() (err error) { deployments, err = client.AppsV1().Deployments(ns).List(ctx, listOpts); return }},
-		{"ReplicaSets", func() (err error) { replicaSets, err = client.AppsV1().ReplicaSets(ns).List(ctx, listOpts); return }},
-		{"StatefulSets", func() (err error) { statefulSets, err = client.AppsV1().StatefulSets(ns).List(ctx, listOpts); return }},
-		{"DaemonSets", func() (err error) { daemonSets, err = client.AppsV1().DaemonSets(ns).List(ctx, listOpts); return }},
-		{"Pods", func() (err error) { pods, err = client.CoreV1().Pods(ns).List(ctx, listOpts); return }},
-		{"Services", func() (err error) { services, err = client.CoreV1().Services(ns).List(ctx, listOpts); return }},
-		{"Ingresses", func() (err error) { ingresses, err = client.NetworkingV1().Ingresses(ns).List(ctx, listOpts); return }},
-		{"ConfigMaps", func() (err error) { configMaps, err = client.CoreV1().ConfigMaps(ns).List(ctx, listOpts); return }},
-		{"Secrets", func() (err error) { secrets, err = client.CoreV1().Secrets(ns).List(ctx, listOpts); return }},
+	}
+	every := []listCall{
+		{KindJobs, func() (err error) { jobs, err = client.BatchV1().Jobs(ns).List(ctx, listOpts); return }},
+		{KindDeployments, func() (err error) { deployments, err = client.AppsV1().Deployments(ns).List(ctx, listOpts); return }},
+		{KindReplicaSets, func() (err error) { replicaSets, err = client.AppsV1().ReplicaSets(ns).List(ctx, listOpts); return }},
+		{KindStatefulSets, func() (err error) { statefulSets, err = client.AppsV1().StatefulSets(ns).List(ctx, listOpts); return }},
+		{KindDaemonSets, func() (err error) { daemonSets, err = client.AppsV1().DaemonSets(ns).List(ctx, listOpts); return }},
+		{KindPods, func() (err error) { pods, err = client.CoreV1().Pods(ns).List(ctx, listOpts); return }},
+		{KindServices, func() (err error) { services, err = client.CoreV1().Services(ns).List(ctx, listOpts); return }},
+		{KindIngresses, func() (err error) { ingresses, err = client.NetworkingV1().Ingresses(ns).List(ctx, listOpts); return }},
+		{KindConfigMaps, func() (err error) { configMaps, err = client.CoreV1().ConfigMaps(ns).List(ctx, listOpts); return }},
+		{KindSecrets, func() (err error) { secrets, err = client.CoreV1().Secrets(ns).List(ctx, listOpts); return }},
 		// PersistentVolumes and StorageClasses are cluster-scoped — listed
 		// cluster-wide, not by namespace.
-		{"PersistentVolumes", func() (err error) { pvs, err = client.CoreV1().PersistentVolumes().List(ctx, listOpts); return }},
-		{"PersistentVolumeClaims", func() (err error) { pvcs, err = client.CoreV1().PersistentVolumeClaims(ns).List(ctx, listOpts); return }},
-		{"StorageClasses", func() (err error) {
+		{KindPersistentVolumes, func() (err error) { pvs, err = client.CoreV1().PersistentVolumes().List(ctx, listOpts); return }},
+		{KindPersistentVolumeClaims, func() (err error) {
+			pvcs, err = client.CoreV1().PersistentVolumeClaims(ns).List(ctx, listOpts)
+			return
+		}},
+		{KindStorageClasses, func() (err error) {
 			storageClasses, err = client.StorageV1().StorageClasses().List(ctx, listOpts)
 			return
 		}},
+	}
+	calls := make([]listCall, 0, len(every))
+	for _, call := range every {
+		if kinds.Has(call.kind) {
+			calls = append(calls, call)
+		}
 	}
 
 	errs := make([]error, len(calls))
@@ -171,7 +309,7 @@ func ListResources(ctx context.Context, client kubernetes.Interface, ns string) 
 			continue
 		}
 		failed++
-		kind := calls[i].kind
+		kind := calls[i].kind.label()
 		if apiErrors.IsForbidden(err) {
 			forbidden++
 			warnings = append(warnings, "Could not list "+kind+" — check RBAC permissions")
@@ -186,8 +324,8 @@ func ListResources(ctx context.Context, client kubernetes.Interface, ns string) 
 		return ResourceTree{}, fmt.Errorf("%w: %s", ErrClusterUnavailable, describeListError(firstErr))
 	}
 
-	// A failed call may leave its list nil; substitute empty lists so the
-	// tree-building below needs no nil checks.
+	// A failed or unselected call leaves its list nil; substitute empty lists
+	// so the tree-building below needs no nil checks.
 	if jobs == nil {
 		jobs = &batchV1.JobList{}
 	}
@@ -317,7 +455,7 @@ func ListResources(ctx context.Context, client kubernetes.Interface, ns string) 
 		}
 	}
 
-	tree := ResourceTree{Namespace: ns}
+	tree := ResourceTree{Namespace: ns, Kinds: kinds.Names()}
 
 	for i, j := range jobs.Items {
 		tree.Jobs = append(tree.Jobs, jobToResource(j, jobChildren[i]))

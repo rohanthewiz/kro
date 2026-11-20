@@ -33,7 +33,7 @@ history. Seeded 2026-11-03 by `/next-list seed` from the last 15 session docs
 - Nothing leaves Open, Validate or Roadmap without a line in another section.
 - Open, Validate and Roadmap each stay in ID order.
 
-**Next ID:** N-048
+**Next ID:** N-049
 
 ## Open
 
@@ -57,16 +57,6 @@ checks are N-043 to N-046 under Validate.
   downloaded. A chatty long-lived pod can also have GBs of history, so it
   needs a size cap or an opt-in (a "fetch full history" action in the
   modal).
-
-- **N-037** · raised `2026-1118-1509-reliability-performance-usability-review` · value medium · performance
-  Every snapshot lists all 13 kinds whatever tab is showing, including full
-  Secret and ConfigMap objects (data included) just to count keys. Let the
-  stream take the active tab and list only what that tab and the summary
-  cards need: Jobs, Deployments, ReplicaSets, StatefulSets, DaemonSets, Pods
-  and Services always; Ingresses, ConfigMaps, Secrets, PVs, PVCs and
-  StorageClasses only for their own tab. The tree then needs to say which
-  kinds it carries, so the page does not render "No secrets found" for a
-  kind that was not asked for.
 
 - **N-038** · raised `2026-1118-1509-reliability-performance-usability-review` · value medium · security · decision
   Change the default bind address from all interfaces to 127.0.0.1 (N-031
@@ -212,6 +202,16 @@ repair a test. No product change is planned unless the check finds a defect.
   ~2s while a pod logs (before this fix it only moved on stream state
   changes). Passed in headless WebKit against a fake API.
 
+- **N-048** · raised `2026-1120-1609-tab-scoped-resource-kinds` · value low
+  Follow-up check for N-037: after a `mac-install.sh` rebuild, open KRo.app
+  on a namespace with Secrets and ConfigMaps. Confirm the Pods tab fills as
+  before. Switching to Config should show a brief "Loading secrets" and then
+  the rows, never "No secrets found". Do the same for Networking (Ingresses)
+  and Storage (PVs, PVCs, StorageClasses). An RBAC warning for one of those
+  kinds should still appear on its tab. Moving between Pods, Deployments,
+  Sets and Watch should not flash anything. Passed in headless WebKit
+  against a fake API.
+
 ## Roadmap
 
 Wanted but deferred. Not "next"; promote to Open when its time comes.
@@ -244,6 +244,23 @@ Wanted but deferred. Not "next"; promote to Open when its time comes.
 - **N-019** · declined `2026-0818-1749-favorite-cluster-namespace-combos` — Per-browser favorites. Favorites are global to the kro instance, matching how pinned namespaces work.
 
 ## Closed
+
+- **N-037** · raised `2026-1118-1509-reliability-performance-usability-review` · closed 2026-11-20, `2026-1120-1609-tab-scoped-resource-kinds`
+  Snapshots now list only what the active tab shows. `ListResources` takes a
+  `kube.Kinds` bitset and always adds `CoreKinds` (Jobs, Deployments,
+  ReplicaSets, StatefulSets, DaemonSets, Pods, Services): the pod tree needs
+  every owner kind, and the summary cards need the counts. Ingresses, PVs,
+  PVCs, StorageClasses, ConfigMaps and Secrets are listed only for their own
+  tab. `/api/resources` and `/sse/resources` take `?kinds=` (absent = every
+  kind, for curl and pages from before the parameter). `tree.kinds` names
+  what was listed, and the page shows "Loading <kind>" for anything else.
+  `switchTab` reopens the stream only when the tab's kinds change.
+  `applyTree` drops a stale tree that lacks the tab's kinds; without that,
+  Config could stick on Loading. Core-only tabs: 7 List calls per round
+  instead of 13. Tests: `TestListResourcesListsOnlySelectedKinds`,
+  `TestListResourcesKeepsPodTreeWhateverIsAsked`, `TestParseKinds`,
+  `TestResourcesStreamListsRequestedKinds`, and others. The in-app check is
+  N-048.
 
 - **N-007** · raised `2026-0720-1553-podwatch-whole-list-cap-and-approx-entry-counts` · closed 2026-11-20, `2026-1120-1537-podwatch-approx-entry-row-count-and-live-tick-fix`
   Pod Watch rows now show "~N entries" (exact "N lines" in the tooltip).
