@@ -7,6 +7,9 @@ live updates over SSE, no cluster-side install.
 ## Features
 
 - Loads `~/.kube/config` (or `$KUBECONFIG`) on startup; lists every context.
+  Contexts added or removed from a shell (`kind create cluster`,
+  `aws eks update-kubeconfig`) appear when the kro window regains focus, no
+  restart needed.
 - Per-cluster pinned namespace lists you build up yourself (add `+`, remove `×`).
   Stored as a small JSON file at `os.UserConfigDir()/kro/state.json`.
 - Favorite Cluster/Namespace combos with three ways to reach them:
@@ -173,7 +176,7 @@ web/      rweb routes, handlers, SSE feeder, page render, embedded CSS/JS
 
 | Method | Path                       | Purpose                                                |
 |--------|----------------------------|--------------------------------------------------------|
-| GET    | `/api/contexts`            | List kubeconfig contexts + active one                  |
+| GET    | `/api/contexts`            | List kubeconfig contexts + active one (re-reads the kubeconfig if a file changed) |
 | GET    | `/api/namespaces`          | List pinned namespaces for active context              |
 | POST   | `/api/namespaces`          | Pin a namespace `{namespace, select?}`                 |
 | DELETE | `/api/namespaces?name=...` | Unpin a namespace                                      |

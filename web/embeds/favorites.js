@@ -729,6 +729,13 @@
         render();
     };
 
+    // resources.js calls this when the context list changed on disk (a
+    // cluster added or removed from a shell) without the selection changing.
+    // Only the palette's cached rows are stale; the chips are unaffected.
+    window.kroContextsChanged = function() {
+        targets = [];
+    };
+
     document.addEventListener('DOMContentLoaded', function() {
         var star = document.getElementById('btn-fav-toggle');
         if (star) star.addEventListener('click', onToggleStar);

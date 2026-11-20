@@ -33,7 +33,7 @@ history. Seeded 2026-11-03 by `/next-list seed` from the last 15 session docs
 - Nothing leaves Open, Validate or Roadmap without a line in another section.
 - Open, Validate and Roadmap each stay in ID order.
 
-**Next ID:** N-049
+**Next ID:** N-051
 
 ## Open
 
@@ -64,11 +64,15 @@ checks are N-043 to N-046 under Validate.
   kro from another machine until they set `KRO_HOST=0.0.0.0`, and the
   Dockerfile would need that set. Recommended, but it is the owner's call.
 
-- **N-039** · raised `2026-1118-1509-reliability-performance-usability-review` · value low · usability
-  The kubeconfig is read once at startup (and after a merge upload). A
-  context added from a shell (`aws eks update-kubeconfig`, `kind create
-  cluster`) does not appear until kro restarts. Re-read when a kubeconfig
-  file's mtime changes, checked on `/api/contexts`.
+- **N-050** · raised `2026-1120-1627-kubeconfig-reload-on-change-n039` · value low
+  On page load after the selected context was deleted from the kubeconfig,
+  the namespace dropdown comes up blank. `ResolveSelection`
+  (`kube/selector.go`) falls back to another context when the `kro_ctx`
+  cookie names a context that no longer exists, but it still honors the
+  `kro_ns` cookie, which belonged to the deleted context. The server then
+  answers for e.g. `alpha`/`ns-beta`. The live path (window focus) avoids
+  this since N-039 by doing a full switch. The fix: ignore the namespace
+  cookie when the context cookie was rejected, and add a selector test.
 
 ## Validate
 
@@ -212,6 +216,14 @@ repair a test. No product change is planned unless the check finds a defect.
   Sets and Watch should not flash anything. Passed in headless WebKit
   against a fake API.
 
+- **N-049** · raised `2026-1120-1627-kubeconfig-reload-on-change-n039` · value low
+  Follow-up check for N-039: after a `mac-install.sh` rebuild, open KRo.app,
+  run `kubectl config set-context test-n039 --cluster=<any> --user=<any>` in
+  a terminal, then Cmd+Tab back. The context dropdown should list
+  `test-n039` without a restart. This confirms WKWebView fires window
+  `focus` on app activation; headless WebKit only had it dispatched by hand.
+  Remove it afterwards with `kubectl config delete-context test-n039`.
+
 ## Roadmap
 
 Wanted but deferred. Not "next"; promote to Open when its time comes.
@@ -244,6 +256,20 @@ Wanted but deferred. Not "next"; promote to Open when its time comes.
 - **N-019** · declined `2026-0818-1749-favorite-cluster-namespace-combos` — Per-browser favorites. Favorites are global to the kro instance, matching how pinned namespaces work.
 
 ## Closed
+
+- **N-039** · raised `2026-1118-1509-reliability-performance-usability-review` · closed 2026-11-20, `2026-1120-1627-kubeconfig-reload-on-change-n039`
+  The registry records each kubeconfig file's mtime and size at load;
+  `ReloadIfChanged` re-reads when either differs (or a file appears or
+  disappears), called from `/api/contexts` and `/api/targets`. A reload
+  drops only the cached clientsets whose context's cluster or user entry
+  changed, so `kubectl config use-context` or `kubens` rebuild nothing. A
+  file that fails to parse keeps the previous config and is not re-parsed
+  until the next write. The page re-fetches contexts on window focus and on
+  visibilitychange, repaints only when the list changed, and does a full
+  switch when the server now resolves a different context (e.g. the shown
+  one was deleted). Tests: five `TestReload*` tests in
+  `kube/registry_test.go`; headless WebKit passed 9 checks. The in-app
+  focus check is N-049.
 
 - **N-037** · raised `2026-1118-1509-reliability-performance-usability-review` · closed 2026-11-20, `2026-1120-1609-tab-scoped-resource-kinds`
   Snapshots now list only what the active tab shows. `ListResources` takes a

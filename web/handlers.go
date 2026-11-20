@@ -46,7 +46,11 @@ func (h *handlers) resolve(c rweb.Context) (kube.Selection, error) {
 }
 
 // Contexts returns all kubeconfig contexts plus the active selection.
+// It re-reads the kubeconfig first if a file changed on disk, so contexts
+// added from a shell show up the next time the page asks (on load, and
+// whenever the window regains focus).
 func (h *handlers) Contexts(c rweb.Context) error {
+	h.refreshKubeconfig()
 	sel, _ := h.resolve(c)
 	return c.WriteJSON(map[string]any{
 		"contexts": h.reg.Contexts(),
@@ -394,6 +398,23 @@ func (h *handlers) MergeKubeconfig(c rweb.Context) error {
 }
 
 // ----- helpers -----
+
+// refreshKubeconfig picks up kubeconfig edits made outside kro (see
+// ClientRegistry.ReloadIfChanged). It is called by the handlers that list
+// contexts, which are the ones whose answer a new context would change.
+// A failed reload is logged and otherwise ignored: the previous config
+// stays in effect, and a half-written or mistyped kubeconfig should not
+// take the context list down with it.
+func (h *handlers) refreshKubeconfig() {
+	changed, err := h.reg.ReloadIfChanged()
+	if err != nil {
+		logger.WarnF("kubeconfig changed on disk but did not load; keeping the previous one: %v", err)
+		return
+	}
+	if changed {
+		logger.InfoF("kubeconfig changed on disk; reloaded (contexts=%d)", len(h.reg.Raw().Contexts))
+	}
+}
 
 // clusterErrStatus maps a failed one-shot cluster call to an HTTP status.
 // These used to answer 404 (or 500) for everything, so "the cluster did not

@@ -57,18 +57,84 @@
     var currentNs = '';
 
     function loadContexts() {
-        return fetch('/api/contexts').then(function(r) { return r.json(); }).then(function(data) {
-            var sel = document.getElementById('ctx-select');
-            sel.innerHTML = '';
-            (data.contexts || []).forEach(function(c) {
-                var opt = document.createElement('option');
-                opt.value = c.name;
-                opt.textContent = c.name;
-                sel.appendChild(opt);
-            });
-            currentCtx = data.current || ((data.contexts && data.contexts[0] && data.contexts[0].name) || '');
-            sel.value = currentCtx;
-            return currentCtx;
+        return fetch('/api/contexts').then(function(r) { return r.json(); }).then(renderContexts);
+    }
+
+    // resolvedContext is the context an /api/contexts answer selects: the
+    // server's cookie-resolved choice, or the first context when it had none.
+    function resolvedContext(data) {
+        return data.current || ((data.contexts && data.contexts[0] && data.contexts[0].name) || '');
+    }
+
+    // renderContexts repaints the context dropdown from an /api/contexts
+    // answer and returns the context that ended up selected.
+    function renderContexts(data) {
+        var sel = document.getElementById('ctx-select');
+        sel.innerHTML = '';
+        (data.contexts || []).forEach(function(c) {
+            var opt = document.createElement('option');
+            opt.value = c.name;
+            opt.textContent = c.name;
+            sel.appendChild(opt);
+        });
+        currentCtx = resolvedContext(data);
+        sel.value = currentCtx;
+        return currentCtx;
+    }
+
+    // ----- Pick up kubeconfig changes made outside kro -----
+    // /api/contexts re-reads the kubeconfig when a file changed on disk, but
+    // the page only asks on load. The usual flow is: switch to a terminal,
+    // run `kind create cluster` or `aws eks update-kubeconfig`, switch back.
+    // Coming back focuses the window, so that is when to ask again. In
+    // KRo.app there is no address bar to reload from, so without this the
+    // new context would only appear after quitting and reopening the app.
+    //
+    // A refresh that finds nothing new leaves the dropdown alone, so this
+    // costs one small request per focus and nothing visible. When the
+    // context this page shows is no longer the one the server resolves
+    // (the cluster's context was deleted, e.g. by `kind delete cluster`, or
+    // another tab switched clusters through the shared cookie), the page
+    // follows the server: requests from this page already go to the
+    // server's context, so the tables must show that context too.
+    //
+    // Following goes through kroSwitchTarget (a full switch) rather than
+    // just reloading the namespace list. When the context cookie names a
+    // deleted context, the server falls back to another context but still
+    // honors the namespace cookie, which belongs to the deleted one. A
+    // plain reload would show the fallback cluster with a namespace it may
+    // not have (and an empty namespace dropdown). The switch rewrites both
+    // cookies and lands on the cluster's own last-used namespace.
+    var contextsRefreshing = false;
+
+    function refreshContexts() {
+        if (contextsRefreshing) return; // focus and visibilitychange often fire together
+        var sel = document.getElementById('ctx-select');
+        if (!sel) return;
+        contextsRefreshing = true;
+        var shown = Array.prototype.map.call(sel.options, function(o) { return o.value; }).join('\n');
+        fetch('/api/contexts').then(function(r) { return r.json(); }).then(function(data) {
+            var names = (data.contexts || []).map(function(c) { return c.name; }).join('\n');
+            var target = resolvedContext(data);
+            var switched = target !== currentCtx;
+            if (names === shown && !switched) return;
+
+            // renderContexts would move currentCtx to the target as a side
+            // effect; keep the page's own value until the switch below
+            // commits, so a switch that fails leaves currentCtx telling the
+            // truth about what the tables show.
+            var shownCtx = currentCtx;
+            renderContexts(data);
+            currentCtx = shownCtx;
+            // The palette caches its rows until a selection change; a new
+            // context is a new row, so drop that cache too.
+            if (window.kroContextsChanged) window.kroContextsChanged();
+            if (!switched || !target) return;
+            return window.kroSwitchTarget(target, '');
+        }).catch(function(err) {
+            console.error('refresh contexts:', err);
+        }).then(function() {
+            contextsRefreshing = false;
         });
     }
 
@@ -2658,6 +2724,16 @@
         // Visible again. If the stream was closed, reopen it; its first event
         // is a full snapshot, so the tables catch up without a manual refresh.
         if (!resourcesSource) initResourcesStream();
+        refreshContexts();
+    });
+
+    // Window focus covers the Cmd+Tab case, where the window never stops
+    // being visible (a terminal beside it, or on another monitor), so
+    // visibilitychange does not fire. Focus events from elements inside the
+    // page do not reach a bubble-phase listener on window, but check the
+    // target anyway so a stray one can't trigger a refresh per click.
+    window.addEventListener('focus', function(e) {
+        if (e.target === window) refreshContexts();
     });
 
     // ===== Terminal =====

@@ -232,6 +232,9 @@ type target struct {
 // from the kubeconfig and state.json — no cluster round trips, so opening the
 // switcher is instant even with a dozen clusters configured.
 func (h *handlers) Targets(c rweb.Context) error {
+	// The palette lists every context, so a cluster added from a shell
+	// should be reachable here without first reloading the page.
+	h.refreshKubeconfig()
 	sel, _ := h.resolve(c)
 
 	out := make([]target, 0, 32)
