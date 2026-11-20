@@ -135,6 +135,24 @@
         return Math.floor(s / 3600) + 'h ago';
     }
 
+    // Per-row capture count. The visible number is approximate *entries*
+    // (server-side startsEntry: blank/indented continuation lines such as
+    // stack frames fold into the entry above), hence the "~", matching the
+    // view dropdown's "Errors (~3)". Zero is exact, so it drops the "~". The
+    // exact line count moves to the tooltip (countTitle): lines are still what
+    // the file and the console buffer setting are measured in.
+    // c is a status stream or a stream_counts item; both carry entries/lines.
+    function countText(c) {
+        var n = c.entries || 0;
+        var head = (n > 0 ? '~' : '') + n + (n === 1 ? ' entry' : ' entries');
+        return head + (c.lastActivity ? ' · ' + agoText(c.lastActivity) : '');
+    }
+    function countTitle(c) {
+        var n = c.lines || 0;
+        return n + (n === 1 ? ' line' : ' lines') + ' captured. Entries are approximate: ' +
+            'continuation lines (stack frames, wrapped text) count with the line above.';
+    }
+
     // The global context/namespace dropdowns (shared with the Resources view).
     function currentSelection() {
         var ctxSel = document.getElementById('ctx-select');
@@ -618,8 +636,13 @@
                     '<span class="watch-badge ' + esc(st.state) + '"' +
                         (st.error ? ' title="' + esc(st.error) + '"' : '') + '>' + esc(st.state) + '</span>' +
                     '<span class="pod" title="' + esc(st.file) + '">' + esc(st.pod) + '</span>' +
-                    '<span class="meta" data-count-for="' + esc(key) + '">' + st.lines + ' lines' +
-                        (st.lastActivity ? ' · ' + agoText(st.lastActivity) : '') + '</span>' +
+                    // Located by patchCounts through the same data-ctx/ns/pod
+                    // trio the buttons carry, not by frameKey: that key joins
+                    // with U+0000, which the HTML parser rewrites to U+FFFD
+                    // inside an attribute, so a key-valued attribute never
+                    // compared equal and the live count never ticked.
+                    '<span class="meta" data-count-for' + dataAttrs + ' title="' + esc(countTitle(st)) + '">' +
+                        esc(countText(st)) + '</span>' +
                     '<span class="actions">' + actions + '</span>' +
                 '</div>';
             });
@@ -850,9 +873,14 @@
             var key = frameKey(payload.context, payload.namespace, c.pod);
             var els = list.querySelectorAll('.meta[data-count-for]');
             for (var i = 0; i < els.length; i++) {
-                if (els[i].getAttribute('data-count-for') === key) {
-                    els[i].textContent = c.lines + ' lines' +
-                        (c.lastActivity ? ' · ' + agoText(c.lastActivity) : '');
+                // Matched field by field (see the span in renderStatus):
+                // getAttribute returns esc()'d values decoded back to the
+                // originals, so plain string equality is exact.
+                if (els[i].getAttribute('data-pod') === c.pod &&
+                    els[i].getAttribute('data-ns') === payload.namespace &&
+                    els[i].getAttribute('data-ctx') === payload.context) {
+                    els[i].textContent = countText(c);
+                    els[i].title = countTitle(c);
                     break;
                 }
             }

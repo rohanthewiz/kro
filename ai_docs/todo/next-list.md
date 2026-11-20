@@ -33,7 +33,7 @@ history. Seeded 2026-11-03 by `/next-list seed` from the last 15 session docs
 - Nothing leaves Open, Validate or Roadmap without a line in another section.
 - Open, Validate and Roadmap each stay in ID order.
 
-**Next ID:** N-047
+**Next ID:** N-048
 
 ## Open
 
@@ -41,12 +41,6 @@ Items N-028 to N-042 came out of the 2026-11-18 reliability / performance /
 usability review (`2026-1118-1509-reliability-performance-usability-review`). N-028 to
 N-036 and N-042 were done in that session and are under Closed; their in-app
 checks are N-043 to N-046 under Validate.
-
-- **N-007** · raised `2026-0720-1553-podwatch-whole-list-cap-and-approx-entry-counts` · value low
-  The per-row main "N lines" count in Pod Watch (`watch.js`, `st.lines + '
-  lines'`) is still literal lines, while Errors/Warnings counts are now
-  approximate entries. The user may want it as approx entries too (offered,
-  not requested).
 
 - **N-013** · raised `2026-1016-1505-live-log-capture-and-streamed-download` · value medium
   Tag an rweb release containing the streaming API (rweb's own list item
@@ -211,6 +205,13 @@ repair a test. No product change is planned unless the check finds a defect.
   Storage tab still shows "check RBAC permissions" for PersistentVolumes /
   StorageClasses.
 
+- **N-047** · raised `2026-1120-1537-podwatch-approx-entry-row-count-and-live-tick-fix` · value low
+  Follow-up check for N-007: after a `mac-install.sh` rebuild, start a Pod
+  Watch in KRo.app and confirm each row reads "~N entries · Ns ago", that
+  hovering it shows the exact line count, and that the number ticks every
+  ~2s while a pod logs (before this fix it only moved on stream state
+  changes). Passed in headless WebKit against a fake API.
+
 ## Roadmap
 
 Wanted but deferred. Not "next"; promote to Open when its time comes.
@@ -243,6 +244,21 @@ Wanted but deferred. Not "next"; promote to Open when its time comes.
 - **N-019** · declined `2026-0818-1749-favorite-cluster-namespace-combos` — Per-browser favorites. Favorites are global to the kro instance, matching how pinned namespaces work.
 
 ## Closed
+
+- **N-007** · raised `2026-0720-1553-podwatch-whole-list-cap-and-approx-entry-counts` · closed 2026-11-20, `2026-1120-1537-podwatch-approx-entry-row-count-and-live-tick-fix`
+  Pod Watch rows now show "~N entries" (exact "N lines" in the tooltip).
+  `Stream.EntryCount` (`podwatch/manager.go`) ticks on lines where
+  `startsEntry` (`podwatch/classify.go`) is true: leveled lines always;
+  unleveled lines unless blank, whitespace-led, or "Caused by:" / Python
+  "Traceback". It judges each line's own shape instead of inheriting an
+  error run, so apps that only level their errors don't freeze the count.
+  Indentation is read from the untagged container line (`writeLineBody`).
+  Status and `stream_counts` carry `entries`. Found and fixed on the way:
+  the row's live count never ticked. `data-count-for` held the
+  U+0000-joined `frameKey`, which the HTML parser stores as U+FFFD, so
+  `patchCounts` never matched. Rows only changed on full re-renders. The
+  span now carries `data-ctx`/`data-ns`/`data-pod`. Tests:
+  `TestStartsEntry`, `TestEntryCount`. The in-app check is N-047.
 
 - **N-042** · raised `2026-1118-1509-reliability-performance-usability-review` · closed 2026-11-18, `2026-1118-1509-reliability-performance-usability-review`
   Switching cluster with the Cluster dropdown left the NS dropdown blank and

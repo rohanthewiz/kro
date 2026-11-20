@@ -125,6 +125,7 @@ type Stream struct {
 	StartedAt time.Time
 
 	LineCount  atomic.Int64
+	EntryCount atomic.Int64 // approx. entries in the main log: lines that start an entry (see startsEntry)
 	ErrCount   atomic.Int64 // approx. error entries: ticks on new-level lines, not inherited continuations
 	WarnCount  atomic.Int64 // approx. warning entries: ticks on new-level lines, not inherited continuations
 	LastLineAt atomic.Int64 // unix nanos of the last captured line
@@ -157,7 +158,8 @@ type StreamStatus struct {
 	State        string    `json:"state"`
 	File         string    `json:"file"`
 	StartedAt    time.Time `json:"startedAt"`
-	Lines        int64     `json:"lines"`
+	Lines        int64     `json:"lines"`       // exact captured lines (markers excluded)
+	Entries      int64     `json:"entries"`     // approximate main-log entries (see Stream.EntryCount)
 	ErrEntries   int64     `json:"errEntries"`  // approximate error entries (see Stream.ErrCount)
 	WarnEntries  int64     `json:"warnEntries"` // approximate warning entries (see Stream.WarnCount)
 	LastActivity time.Time `json:"lastActivity,omitzero"`
@@ -805,6 +807,7 @@ func (m *Manager) runCountsTicker(sess *Session) {
 				continue
 			}
 			c := map[string]any{"pod": st.Pod, "lines": st.LineCount.Load(),
+				"entries":    st.EntryCount.Load(),
 				"errEntries": st.ErrCount.Load(), "warnEntries": st.WarnCount.Load()}
 			if n := st.LastLineAt.Load(); n > 0 {
 				c["lastActivity"] = time.Unix(0, n)

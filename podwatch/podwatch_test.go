@@ -481,6 +481,61 @@ func TestClassifyLine(t *testing.T) {
 	}
 }
 
+func TestStartsEntry(t *testing.T) {
+	cases := []struct {
+		line string
+		want bool
+	}{
+		{`level=info msg="hi"`, true},
+		{`2026-01-01 ERROR something failed`, true},
+		{`    2026-01-01 ERROR indented but leveled`, true}, // level wins over indentation
+		{`plain unleveled app output`, true},
+		{`{`, true}, // start of a pretty-printed JSON dump
+		{`    at foo.bar(stack:12)`, false},
+		{"\tat com.example.Foo.bar(Foo.java:42)", false},
+		{`  "key": "value"`, false},
+		{``, false},
+		{`Caused by: java.io.IOException: closed`, false},
+		{`Traceback (most recent call last):`, false},
+	}
+	for _, c := range cases {
+		if got := startsEntry(classifyLine(c.line), c.line); got != c.want {
+			t.Errorf("startsEntry(%q) = %v, want %v", c.line, got, c.want)
+		}
+	}
+}
+
+// TestEntryCount checks the approximate main-log entry counter end to end
+// through writeLine/writeLineBody: continuations fold into the entry above,
+// a container tag doesn't hide a body's indentation, lifecycle markers count
+// as neither lines nor entries, and an unindented unleveled line inside an
+// error run counts as a main entry even though it isn't an error entry.
+func TestEntryCount(t *testing.T) {
+	st := &Stream{Pod: "p", state: StateRunning, subs: map[chan string]string{}}
+
+	st.writeLine(`level=info msg="starting"`)    // entry 1
+	st.writeLine(`level=error msg="boom"`)       // entry 2
+	st.writeLine(`    at stack.frame`)           // continuation
+	st.writeLine(`Caused by: io.EOF`)            // continuation
+	st.writeLine(``)                             // continuation
+	st.writeLine(`plain output after the error`) // entry 3: inherits err route, not an error entry
+	st.mu.Lock()
+	st.writeMarkerLocked("paused") // neither a line nor an entry
+	st.mu.Unlock()
+	st.writeLineBody("[app] \tat tagged.frame", "\tat tagged.frame") // continuation despite the tag
+	st.writeLineBody("[app] hello", "hello")                         // entry 4
+
+	if got := st.LineCount.Load(); got != 8 {
+		t.Errorf("LineCount = %d, want 8 (marker excluded)", got)
+	}
+	if got := st.EntryCount.Load(); got != 4 {
+		t.Errorf("EntryCount = %d, want 4", got)
+	}
+	if s := st.status(); s.Entries != 4 || s.Lines != 8 {
+		t.Errorf("status entries/lines = %d/%d, want 4/8", s.Entries, s.Lines)
+	}
+}
+
 // TestErrorsWarningsCompanionAndView covers the whole feature: errors and
 // warnings are routed into untruncated companion files (continuation lines
 // inheriting the preceding level), and the errors/warnings views replay the

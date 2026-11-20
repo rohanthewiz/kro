@@ -182,14 +182,24 @@ func (m *Manager) consumeLine(sess *Session, st *Stream, ln kube.LogLine) {
 	if ln.Container != "" {
 		line = "[" + ln.Container + "] " + line
 	}
-	if st.writeLine(line) { // first line: starting → running
+	// The untagged ln.Line goes along so entry counting sees the container's
+	// own indentation, not the "[container] " tag in front of it.
+	if st.writeLineBody(line, ln.Line) { // first line: starting → running
 		m.notifyEvent("stream_state", m.streamPayload(sess, st))
 	}
 }
 
 // writeLine appends a captured line to the file, ring, and subscribers.
 // Reports whether the stream just transitioned starting → running.
+// For untagged lines, where the stored line and the container's body match.
 func (st *Stream) writeLine(line string) (flipped bool) {
+	return st.writeLineBody(line, line)
+}
+
+// writeLineBody is writeLine with the container's untagged body given
+// separately: line is what is stored and shown (possibly "[container] "-
+// tagged), body is what startsEntry inspects for continuation indentation.
+func (st *Stream) writeLineBody(line, body string) (flipped bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.state.terminal() {
@@ -199,8 +209,13 @@ func (st *Stream) writeLine(line string) (flipped bool) {
 		st.state = StateRunning
 		flipped = true
 	}
-	st.emitLocked(line)
+	cls := st.emitLocked(line)
 	st.LineCount.Add(1)
+	// Counted here rather than in emitLocked so lifecycle markers (which also
+	// go through emitLocked) stay out of the entry count, as they do LineCount.
+	if startsEntry(cls, body) {
+		st.EntryCount.Add(1)
+	}
 	st.LastLineAt.Store(time.Now().UnixNano())
 	return flipped
 }
@@ -214,8 +229,11 @@ func (st *Stream) writeMarkerLocked(text string) {
 // emitLocked writes one line to the main file (if open), the matching
 // errors/warnings companion file, the ring, and all subscribers. Subscribers
 // with a view filter ("err"/"wrn") receive only lines in their bucket.
-func (st *Stream) emitLocked(line string) {
-	route, entryStart := st.routeLocked(line)
+// Returns the line's classifyLine bucket so writeLineBody can count entries
+// without running the level regexes a second time on the hot path.
+func (st *Stream) emitLocked(line string) (cls string) {
+	cls = classifyLine(line)
+	route, entryStart := st.routeLocked(cls)
 	if st.w != nil {
 		st.w.WriteString(line)
 		st.w.WriteByte('\n')
@@ -238,20 +256,22 @@ func (st *Stream) emitLocked(line string) {
 		default:
 		}
 	}
+	return cls
 }
 
-// routeLocked classifies a line into an issue bucket ("err"|"wrn") or "",
-// carrying the last recognized level forward so unleveled continuation lines
-// (stack traces, wrapped messages) follow the entry that produced them — the
+// routeLocked maps a line's classifyLine bucket (cls) to an issue bucket
+// ("err"|"wrn") or "", carrying the last recognized level forward so
+// unleveled continuation lines (stack traces, wrapped messages) follow the
+// entry that produced them — the
 // same inheritance the browser colorizer applies per frame. entryStart reports
 // whether the line begins a new entry (it carries an explicit level token)
 // rather than continuing the previous one, so the counters can tally entries
 // (approximately) while the companion file still keeps every line.
-func (st *Stream) routeLocked(line string) (route string, entryStart bool) {
-	switch b := classifyLine(line); b {
+func (st *Stream) routeLocked(cls string) (route string, entryStart bool) {
+	switch cls {
 	case "err", "wrn":
-		st.lastRoute = b
-		return b, true
+		st.lastRoute = cls
+		return cls, true
 	case "oth":
 		st.lastRoute = "oth" // a real info/debug line ends any error/warn run
 		return "", false
@@ -381,6 +401,7 @@ func (st *Stream) status() StreamStatus {
 		File:         path,
 		StartedAt:    st.StartedAt,
 		Lines:        st.LineCount.Load(),
+		Entries:      st.EntryCount.Load(),
 		ErrEntries:   st.ErrCount.Load(),
 		WarnEntries:  st.WarnCount.Load(),
 		LastActivity: last,

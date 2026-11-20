@@ -50,6 +50,53 @@ func classifyLine(line string) string {
 	return ""
 }
 
+// unindentedContinuations are well-known continuation lines that start at
+// column 0, so the whitespace rule in startsEntry misses them: Java's chained
+// cause, and the header Python's logging.exception prints under the message.
+// Kept deliberately short: each entry is a HasPrefix per unleveled line.
+var unindentedContinuations = []string{
+	"Caused by:",
+	"Traceback (most recent call last):",
+}
+
+// startsEntry reports whether a captured line begins a new log entry, for the
+// approximate main entry count (Stream.EntryCount). cls is the line's
+// classifyLine result; body is the line as the container emitted it, before
+// consumeLine adds its "[container] " tag (the tag would hide indentation).
+//
+// Rules, in order:
+//
+//	leveled (cls != "")          → new entry, even if indented
+//	blank / whitespace-led       → continuation (stack frames, wrapped text, pretty JSON)
+//	known unindented continuation → continuation ("Caused by:", Python "Traceback")
+//	anything else                → new entry (plain unleveled app output)
+//
+// Leveled lines always count so that every errors/warnings entry start is also
+// a main entry start, keeping entries ≥ errEntries + warnEntries.
+//
+// Unlike the errors/warnings counters, this does not inherit through a level
+// run (routeLocked's lastRoute). Inheriting would freeze the main count for an
+// app that only levels its errors: after one "ERROR" line, every later plain
+// line would be a "continuation" until an INFO line appeared. Judging each
+// unleveled line by its own shape keeps the count moving with the log; the
+// cost is that an unindented, unleveled line inside an error run (Go's
+// "goroutine 1 [running]:", Python's final "ValueError: …") counts as a main
+// entry but not as an error entry.
+func startsEntry(cls, body string) bool {
+	if cls != "" {
+		return true
+	}
+	if body == "" || body[0] == ' ' || body[0] == '\t' {
+		return false
+	}
+	for _, p := range unindentedContinuations {
+		if strings.HasPrefix(body, p) {
+			return false
+		}
+	}
+	return true
+}
+
 // levelToken extracts the level value from a structured line, JSON first
 // (`"level":"error"`) then logfmt (`level=error` / `level="error"`).
 func levelToken(line string) string {
